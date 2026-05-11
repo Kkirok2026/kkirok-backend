@@ -57,12 +57,12 @@ public class AuthService {
             throw DomainException.conflict("EMAIL_ALREADY_EXISTS", "이미 가입된 이메일입니다.");
         }
 
-        sqlSupport.insert("""
+        sqlSupport.update("""
                 insert into user_health_profile (user_id, height_cm, weight_kg, gender, bmi)
                 values (?, ?, ?, ?, ?)
                 """, userId, request.heightCm(), request.weightKg(), request.gender(), bmi);
 
-        sqlSupport.insert("""
+        sqlSupport.update("""
                 insert into student_verifications (user_id, university_id, student_email, status, verified_at)
                 values (?, ?, ?, ?, ?)
                 """, userId, request.universityId(), normalizeEmail(request.email()), "DOMAIN_VERIFIED", LocalDateTime.now());

@@ -5,7 +5,7 @@
 ```properties
 DB_URL=jdbc:mysql://localhost:3306/kkirok?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Seoul&characterEncoding=utf8
 DB_USERNAME=root
-DB_PASSWORD=
+DB_PASSWORD=1234
 FLYWAY_BASELINE_ON_MIGRATE=false
 ```
 
@@ -19,7 +19,13 @@ create database kkirok
   collate utf8mb4_unicode_ci;
 ```
 
-실행 예시:
+이후에는 환경변수를 매번 입력하지 않고 실행하면 된다.
+
+```sh
+./gradlew bootRun
+```
+
+다른 MySQL 계정을 쓰고 싶으면 실행할 때만 환경변수로 덮어쓴다.
 
 ```sh
 DB_USERNAME=your_user DB_PASSWORD=your_password ./gradlew bootRun

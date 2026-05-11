@@ -174,7 +174,7 @@ public class MealService {
         if (amountG == null || amountG.compareTo(BigDecimal.ZERO) <= 0) {
             throw DomainException.badRequest("AMOUNT_INVALID", "amountG는 0보다 커야 합니다.");
         }
-        sqlSupport.insert("""
+        sqlSupport.update("""
                 insert into diet_entry_item (diet_entry_id, food_id, source_option_id, item_name_snapshot, amount_g)
                 values (?, ?, ?, ?, ?)
                 """, mealLogId, foodId, sourceOptionId, itemName, amountG);

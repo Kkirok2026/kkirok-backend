@@ -21,7 +21,7 @@ public class AuthSessionService {
 
     public String createSession(long userId) {
         String token = UUID.randomUUID().toString().replace("-", "") + UUID.randomUUID().toString().replace("-", "");
-        sqlSupport.insert("""
+        sqlSupport.update("""
                 insert into auth_sessions (user_id, access_token, expires_at)
                 values (?, ?, ?)
                 """, userId, token, LocalDateTime.now().plusDays(7));

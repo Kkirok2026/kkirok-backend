@@ -33,6 +33,10 @@ public class SqlSupport {
         return number.longValue();
     }
 
+    public void update(String sql, Object... args) {
+        jdbcTemplate.update(sql, args);
+    }
+
     private Object generatedKey(KeyHolder keyHolder) {
         Number singleKey = keyHolder.getKeyList().size() == 1 && keyHolder.getKeys() != null && keyHolder.getKeys().size() == 1
                 ? keyHolder.getKey()
