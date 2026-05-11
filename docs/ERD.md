@@ -1,6 +1,6 @@
 # 끼록 MVP ERD
 
-이번 1차 구현은 기능보다 데이터베이스 설계를 우선해, 명시적인 `schema.sql` 기반으로 구성한다. 기존 초안 대비 주요 수정점은 다음과 같다.
+이번 1차 구현은 기능보다 데이터베이스 설계를 우선해, MySQL용 `schema.sql` 기반으로 구성한다. 기존 초안 대비 주요 수정점은 다음과 같다.
 
 - 학교 인증은 `user_account.university_id` 하나로 끝내지 않고 `universities`, `university_email_domains`, `student_verifications`로 분리했다. 현재는 한 학교만 쓰지만, 다른 대학교 도메인/인증 정책을 추가할 수 있다.
 - 가입 시 입력한 키, 몸무게, 성별은 `user_health_profile`에 저장하고 BMI는 서버에서 계산해 `bmi` 컬럼에 저장한다.
