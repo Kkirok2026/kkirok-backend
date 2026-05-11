@@ -6,7 +6,7 @@
 DB_URL=jdbc:mysql://localhost:3306/kkirok?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Seoul&characterEncoding=utf8
 DB_USERNAME=root
 DB_PASSWORD=
-SQL_INIT_MODE=always
+FLYWAY_BASELINE_ON_MIGRATE=false
 ```
 
 ## 초기 DB 생성
@@ -25,10 +25,10 @@ create database kkirok
 DB_USERNAME=your_user DB_PASSWORD=your_password ./gradlew bootRun
 ```
 
-`schema.sql`과 `data.sql`은 초기 개발용 부트스트랩 데이터다. 이미 스키마와 샘플 데이터가 들어간 DB에서 재시작할 때 중복 insert 오류가 나면 `SQL_INIT_MODE=never`로 실행한다.
+애플리케이션 시작 시 Flyway가 `src/main/resources/db/migration`의 migration을 순서대로 적용한다. 적용 이력은 MySQL의 `flyway_schema_history` 테이블에 기록된다.
 
-```sh
-DB_USERNAME=your_user DB_PASSWORD=your_password SQL_INIT_MODE=never ./gradlew bootRun
-```
+## 기존 DB 편입 주의
 
-테스트는 로컬 MySQL 서버 없이도 실행되도록 `src/test/resources/application.properties`에서 H2 MySQL 호환 모드를 사용한다.
+이전에 `schema.sql`/`data.sql`로 직접 초기화한 DB처럼 이미 테이블이 있는 DB를 Flyway로 편입하려면 먼저 실제 DB 상태가 현재 migration 결과와 같은지 확인해야 한다. 확인 없이 `FLYWAY_BASELINE_ON_MIGRATE=true`를 사용하면 누락된 테이블이나 데이터가 있어도 Flyway가 이미 적용된 것으로 간주할 수 있다.
+
+테스트는 로컬 MySQL 서버 없이도 실행되도록 `src/test/resources/application.properties`에서 H2 MySQL 호환 모드와 동일한 Flyway migration을 사용한다.

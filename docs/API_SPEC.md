@@ -7,7 +7,7 @@
 | Base URL | `/api/v1` |
 | Content-Type | `application/json; charset=utf-8` |
 | 인증 | `Authorization: Bearer <access_token>` |
-| DB | MySQL |
+| DB | MySQL, Flyway migration |
 | Swagger UI | `/swagger-ui.html` |
 | OpenAPI JSON | `/v3/api-docs` |
 | 날짜 형식 | `YYYY-MM-DD` |
