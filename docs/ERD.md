@@ -1,436 +1,228 @@
-# ERD
+# 끼록 MVP ERD
+
+이번 1차 구현은 기능보다 데이터베이스 설계를 우선해, 명시적인 `schema.sql` 기반으로 구성한다. 기존 초안 대비 주요 수정점은 다음과 같다.
+
+- 학교 인증은 `user_account.university_id` 하나로 끝내지 않고 `universities`, `university_email_domains`, `student_verifications`로 분리했다. 현재는 한 학교만 쓰지만, 다른 대학교 도메인/인증 정책을 추가할 수 있다.
+- 가입 시 입력한 키, 몸무게, 성별은 `user_health_profile`에 저장하고 BMI는 서버에서 계산해 `bmi` 컬럼에 저장한다.
+- 학생식당 점심의 한식/양식 같은 분류는 `cafeteria_menu_option.category_id`로 표현한다. 기숙사식당 중식/석식은 `DEFAULT` 단일 옵션으로 저장한다.
+- 식단 제외는 삭제가 아니라 `diet_entry_item.is_excluded`로 처리해 원본 기록을 보존한다.
+- 음식 별칭 검색 확장은 `food_alias` 테이블을 둬서 데이터만 추가해도 검색에 반영되도록 했다.
 
 ```mermaid
 erDiagram
-    USER ||--|| USER_PROFILE : has
-    USER ||--o{ USER_CAMPUS : affiliated_with
-    CAMPUS ||--o{ USER_CAMPUS : assigned
+    UNIVERSITIES ||--o{ UNIVERSITY_EMAIL_DOMAINS : has
+    UNIVERSITIES ||--o{ USER_ACCOUNT : primary_school
+    UNIVERSITIES ||--o{ STUDENT_VERIFICATIONS : verifies
+    UNIVERSITIES ||--o{ DINING_PLACE : operates
 
-    USER ||--o{ USER_TARGET : sets
-    USER ||--o{ USER_ALLERGY : has
-    ALLERGY_MASTER ||--o{ USER_ALLERGY : defines
-    USER ||--o{ WEIGHT_LOG : tracks
+    USER_ACCOUNT ||--|| USER_HEALTH_PROFILE : has
+    USER_ACCOUNT ||--o{ STUDENT_VERIFICATIONS : owns
+    USER_ACCOUNT ||--o{ AUTH_SESSIONS : logs_in
+    USER_ACCOUNT ||--o{ DIET_ENTRY : records
 
-    CAMPUS ||--o{ DINING_HALL : has
-    DINING_HALL ||--o{ DINING_MENU : publishes
-    DINING_MENU ||--o{ DINING_MENU_ITEM : includes
+    MEAL_TYPE ||--o{ CAFETERIA_MENU : classifies
+    MEAL_TYPE ||--o{ DIET_ENTRY : classifies
+
+    DINING_PLACE ||--o{ CAFETERIA_MENU : publishes
+    CAFETERIA_MENU ||--o{ CAFETERIA_MENU_OPTION : has
+    MENU_CATEGORY ||--o{ CAFETERIA_MENU_OPTION : categorizes
+    CAFETERIA_MENU_OPTION ||--o{ CAFETERIA_MENU_ITEM : includes
+    CAFETERIA_MENU_OPTION ||--o{ DIET_ENTRY_ITEM : source_of
 
     FOOD ||--o{ FOOD_ALIAS : has
-    FOOD ||--o{ FOOD_ALLERGY : may_contain
-    ALLERGY_MASTER ||--o{ FOOD_ALLERGY : defines
+    FOOD ||--o{ FOOD_NUTRIENT_VALUE : measured_as
+    FOOD ||--o{ CAFETERIA_MENU_ITEM : mapped_to
+    FOOD ||--o{ DIET_ENTRY_ITEM : eaten_as
+    NUTRIENT ||--o{ FOOD_NUTRIENT_VALUE : defines
+    NUTRIENT ||--o{ NUTRITION_STANDARD_VALUE : targets
 
-    FOOD ||--o{ FOOD_CATEGORY_MAP : classified_as
-    FOOD_CATEGORY ||--o{ FOOD_CATEGORY_MAP : maps
+    DIET_ENTRY ||--o{ DIET_ENTRY_ITEM : contains
 
-    FOOD ||--o{ FOOD_INGREDIENT : composed_of
-    INGREDIENT_MASTER ||--o{ FOOD_INGREDIENT : defines
+    NUTRITION_STANDARD_GROUP ||--o{ NUTRITION_STANDARD_VALUE : defines
 
-    FOOD ||--o{ FOOD_NUTRIENT : has
-    NUTRIENT_MASTER ||--o{ FOOD_NUTRIENT : defines
+    UNIVERSITIES {
+        bigint university_id PK
+        varchar university_code UK
+        varchar university_name UK
+        boolean is_active
+        timestamp created_at
+    }
 
-    DINING_MENU_ITEM ||--o{ MENU_ITEM_FOOD_MAP : decomposes
-    FOOD ||--o{ MENU_ITEM_FOOD_MAP : maps_to
+    UNIVERSITY_EMAIL_DOMAINS {
+        bigint domain_id PK
+        bigint university_id FK
+        varchar email_domain UK
+        varchar verification_method
+        boolean is_active
+    }
 
-    DINING_MENU_ITEM ||--o{ MENU_ITEM_ALLERGY : has
-    ALLERGY_MASTER ||--o{ MENU_ITEM_ALLERGY : defines
-
-    DINING_MENU_ITEM ||--o{ MENU_ITEM_INGREDIENT : has
-    INGREDIENT_MASTER ||--o{ MENU_ITEM_INGREDIENT : defines
-
-    DINING_MENU_ITEM ||--o{ MENU_ITEM_NUTRIENT : has
-    NUTRIENT_MASTER ||--o{ MENU_ITEM_NUTRIENT : defines
-
-    USER ||--o{ MEAL_LOG : records
-    MEAL_LOG ||--o{ MEAL_LOG_ITEM : contains
-    FOOD ||--o{ MEAL_LOG_ITEM : logged_as
-    DINING_MENU_ITEM ||--o{ MEAL_LOG_ITEM : logged_as
-
-    MEAL_LOG ||--o| MEAL_FEEDBACK : analyzed_as
-    USER ||--o{ MEAL_FEEDBACK : receives
-    USER_TARGET ||--o{ MEAL_FEEDBACK : based_on
-    MEAL_FEEDBACK ||--o{ MEAL_FEEDBACK_DETAIL : contains
-    MEAL_FEEDBACK ||--o{ NEXT_MEAL_GUIDE : suggests
-    FOOD ||--o{ NEXT_MEAL_GUIDE : recommends
-    DINING_MENU_ITEM ||--o{ NEXT_MEAL_GUIDE : recommends
-
-    USER ||--o{ MENU_RECOMMENDATION : receives
-    USER_TARGET ||--o{ MENU_RECOMMENDATION : based_on
-    DINING_MENU_ITEM ||--o{ MENU_RECOMMENDATION : recommends
-    MENU_RECOMMENDATION ||--o{ MENU_RECOMMENDATION_REASON : explained_by
-
-    USER ||--o{ WEEKLY_FEEDBACK : receives
-    USER_TARGET ||--o{ WEEKLY_FEEDBACK : evaluated_by
-    WEEKLY_FEEDBACK ||--o{ WEEKLY_FEEDBACK_DETAIL : contains
-
-    USER {
+    USER_ACCOUNT {
         bigint user_id PK
-        string email
-        string password_hash
-        string name
-        string status
-        datetime created_at
-        datetime last_login_at
+        bigint primary_university_id FK
+        varchar email UK
+        varchar password_hash
+        varchar name
+        varchar status
+        timestamp created_at
+        timestamp last_login_at
     }
 
-    USER_PROFILE {
+    STUDENT_VERIFICATIONS {
+        bigint verification_id PK
+        bigint user_id FK
+        bigint university_id FK
+        varchar student_email
+        varchar status
+        timestamp verified_at
+    }
+
+    USER_HEALTH_PROFILE {
         bigint user_id PK,FK
-        date birth_date
-        string gender
         decimal height_cm
-        decimal current_weight_kg
-        string activity_level
-        datetime updated_at
+        decimal weight_kg
+        varchar gender
+        decimal bmi
+        timestamp updated_at
     }
 
-    CAMPUS {
-        bigint campus_id PK
-        string campus_name
-        string region
-    }
-
-    USER_CAMPUS {
-        bigint user_campus_id PK
+    AUTH_SESSIONS {
+        bigint session_id PK
         bigint user_id FK
-        bigint campus_id FK
-        boolean is_primary_yn
-        date effective_from
-        date effective_to
+        varchar access_token UK
+        timestamp issued_at
+        timestamp expires_at
+        timestamp revoked_at
     }
 
-    USER_TARGET {
-        bigint target_id PK
-        bigint user_id FK
-        string goal_type
-        decimal start_weight_kg
-        decimal target_weight_kg
-        int target_calorie_kcal
-        decimal target_carb_g
-        decimal target_protein_g
-        decimal target_fat_g
-        int sodium_limit_mg
-        string status
-        date effective_from
-        date effective_to
-        datetime achieved_at
-        datetime created_at
-        datetime updated_at
+    DINING_PLACE {
+        bigint dining_place_id PK
+        bigint university_id FK
+        varchar dining_place_name
+        varchar dining_place_type
+        varchar menu_source_url
+        boolean is_active
     }
 
-    ALLERGY_MASTER {
-        bigint allergy_id PK
-        string allergy_code
-        string allergy_name
-        string allergy_group
-        string description
+    MEAL_TYPE {
+        bigint meal_type_id PK
+        varchar meal_type_code UK
+        varchar meal_type_name
     }
 
-    USER_ALLERGY {
-        bigint user_allergy_id PK
-        bigint user_id FK
-        bigint allergy_id FK
-        string severity_level
-        string note
-        datetime created_at
+    MENU_CATEGORY {
+        bigint category_id PK
+        varchar category_code UK
+        varchar category_name
+        int sort_order
+    }
+
+    CAFETERIA_MENU {
+        bigint menu_id PK
+        bigint dining_place_id FK
+        bigint meal_type_id FK
+        date served_date
+        timestamp crawled_at
+    }
+
+    CAFETERIA_MENU_OPTION {
+        bigint option_id PK
+        bigint menu_id FK
+        bigint category_id FK
+        varchar option_name
+        varchar source_label
+        int price
+        boolean is_available
+    }
+
+    CAFETERIA_MENU_ITEM {
+        bigint menu_item_id PK
+        bigint option_id FK
+        bigint food_id FK
+        varchar raw_item_name
+        decimal amount_g
     }
 
     FOOD {
         bigint food_id PK
-        string source_name
-        string source_food_code
-        string food_name
-        string source_food_category
-        decimal serving_size_g
-        int calories_kcal
-        decimal carb_g
-        decimal protein_g
-        decimal fat_g
-        int sodium_mg
-        decimal sugar_g
-        decimal dietary_fiber_g
-        decimal saturated_fat_g
-        decimal trans_fat_g
-        int cholesterol_mg
-        string default_image_url
+        varchar source_name
+        varchar source_food_code
+        varchar food_name
+        decimal default_serving_g
+        varchar source_category
     }
 
     FOOD_ALIAS {
         bigint alias_id PK
         bigint food_id FK
-        string alias_name
-        string normalized_alias
-        string alias_type
+        varchar alias_name
+        varchar normalized_alias
+        varchar alias_type
         int priority
     }
 
-    FOOD_CATEGORY {
-        bigint category_id PK
-        string category_code
-        string category_name
-        string icon_url
-        string image_url
+    NUTRIENT {
+        bigint nutrient_id PK
+        varchar nutrient_code UK
+        varchar nutrient_name
+        varchar unit
         int sort_order
     }
 
-    FOOD_CATEGORY_MAP {
-        bigint food_category_map_id PK
-        bigint food_id FK
-        bigint category_id FK
-        boolean is_primary_yn
+    FOOD_NUTRIENT_VALUE {
+        bigint food_id PK,FK
+        bigint nutrient_id PK,FK
+        decimal amount_per_100g
     }
 
-    INGREDIENT_MASTER {
-        bigint ingredient_id PK
-        string ingredient_name
-        string normalized_name
-        string ingredient_group
+    DIET_ENTRY {
+        bigint diet_entry_id PK
+        bigint user_id FK
+        bigint meal_type_id FK
+        date consumed_date
+        varchar memo
+        timestamp created_at
+        timestamp updated_at
     }
 
-    FOOD_INGREDIENT {
-        bigint food_ingredient_id PK
+    DIET_ENTRY_ITEM {
+        bigint diet_item_id PK
+        bigint diet_entry_id FK
         bigint food_id FK
-        bigint ingredient_id FK
+        bigint source_option_id FK
+        varchar item_name_snapshot
         decimal amount_g
-        boolean is_major_yn
+        boolean is_excluded
     }
 
-    FOOD_ALLERGY {
-        bigint food_allergy_id PK
-        bigint food_id FK
-        bigint allergy_id FK
-        string risk_type
+    NUTRITION_STANDARD_GROUP {
+        bigint standard_group_id PK
+        varchar gender
+        decimal height_min_cm
+        decimal height_max_cm
+        decimal weight_min_kg
+        decimal weight_max_kg
+        decimal bmi_min
+        decimal bmi_max
+        varchar source_name
+        varchar description
     }
 
-    NUTRIENT_MASTER {
-        bigint nutrient_id PK
-        string nutrient_code
-        string nutrient_name
-        string unit
-        string nutrient_group
-    }
-
-    FOOD_NUTRIENT {
-        bigint food_nutrient_id PK
-        bigint food_id FK
-        bigint nutrient_id FK
-        decimal amount_value
-        decimal basis_amount_g
-    }
-
-    DINING_HALL {
-        bigint dining_hall_id PK
-        bigint campus_id FK
-        string hall_name
-        string hall_type
-        string location
-        string operating_status
-    }
-
-    DINING_MENU {
-        bigint menu_id PK
-        bigint dining_hall_id FK
-        date menu_date
-        string meal_type
-        string source_name
-        datetime uploaded_at
-    }
-
-    DINING_MENU_ITEM {
-        bigint menu_item_id PK
-        bigint menu_id FK
-        string menu_name
-        decimal price
-        decimal serving_size_g
-        int calories_kcal
-        decimal carb_g
-        decimal protein_g
-        decimal fat_g
-        int sodium_mg
-        decimal sugar_g
-        decimal dietary_fiber_g
-        decimal saturated_fat_g
-        decimal trans_fat_g
-        int cholesterol_mg
-        boolean sold_out_yn
-    }
-
-    MENU_ITEM_FOOD_MAP {
-        bigint map_id PK
-        bigint menu_item_id FK
-        bigint food_id FK
-        decimal portion_ratio
-        decimal mapping_confidence
-    }
-
-    MENU_ITEM_ALLERGY {
-        bigint menu_item_allergy_id PK
-        bigint menu_item_id FK
-        bigint allergy_id FK
-        string source_type
-    }
-
-    MENU_ITEM_INGREDIENT {
-        bigint menu_item_ingredient_id PK
-        bigint menu_item_id FK
-        bigint ingredient_id FK
-        decimal amount_g
-        boolean is_estimated_yn
-    }
-
-    MENU_ITEM_NUTRIENT {
-        bigint menu_item_nutrient_id PK
-        bigint menu_item_id FK
-        bigint nutrient_id FK
-        decimal amount_value
-        decimal basis_amount_g
-    }
-
-    MEAL_LOG {
-        bigint meal_log_id PK
-        bigint user_id FK
-        date log_date
-        string meal_type
-        string memo
-        datetime created_at
-        datetime updated_at
-    }
-
-    MEAL_LOG_ITEM {
-        bigint meal_log_item_id PK
-        bigint meal_log_id FK
-        bigint food_id FK
-        bigint menu_item_id FK
-        string entry_source
-        string item_name_snapshot
-        decimal intake_ratio
-        decimal intake_g
-        int calories_kcal
-        decimal carb_g
-        decimal protein_g
-        decimal fat_g
-        int sodium_mg
-        decimal sugar_g
-        decimal dietary_fiber_g
-    }
-
-    MEAL_FEEDBACK {
-        bigint meal_feedback_id PK
-        bigint meal_log_id FK
-        bigint user_id FK
-        bigint target_id FK
-        datetime generated_at
-        int overall_score
-        string summary
-        string next_focus
-    }
-
-    MEAL_FEEDBACK_DETAIL {
-        bigint meal_feedback_detail_id PK
-        bigint meal_feedback_id FK
-        string nutrient_type
-        string status
-        decimal actual_value
-        decimal target_value
-        string feedback_message
-    }
-
-    NEXT_MEAL_GUIDE {
-        bigint next_meal_guide_id PK
-        bigint meal_feedback_id FK
-        string next_meal_type
-        string suggestion_type
-        bigint recommended_food_id FK
-        bigint recommended_menu_item_id FK
-        string message
-        int priority
-    }
-
-    MENU_RECOMMENDATION {
-        bigint recommendation_id PK
-        bigint user_id FK
-        bigint target_id FK
-        bigint menu_item_id FK
-        date recommended_for_date
-        datetime recommended_at
-        string meal_type
-        string recommendation_status
-        boolean allergy_conflict_yn
-        int recommendation_score
-        int rank_order
-        string reason_summary
-    }
-
-    MENU_RECOMMENDATION_REASON {
-        bigint recommendation_reason_id PK
-        bigint recommendation_id FK
-        string reason_type
-        string metric_name
-        decimal current_value
-        decimal target_value
-        decimal contribution_score
-        string reason_message
-    }
-
-    WEIGHT_LOG {
-        bigint weight_log_id PK
-        bigint user_id FK
-        datetime measured_at
-        decimal weight_kg
-        string source_type
-        string note
-        datetime created_at
-    }
-
-    WEEKLY_FEEDBACK {
-        bigint feedback_id PK
-        bigint user_id FK
-        bigint target_id FK
-        date week_start_date
-        date week_end_date
-        int days_logged
-        int total_calories_kcal
-        decimal week_start_weight_kg
-        decimal week_end_weight_kg
-        decimal weight_change_kg
-        string overall_comment
-        datetime created_at
-    }
-
-    WEEKLY_FEEDBACK_DETAIL {
-        bigint feedback_detail_id PK
-        bigint feedback_id FK
-        string nutrient_type
-        string status
-        decimal actual_value
-        decimal target_value
-        string feedback_message
-        string action_guide
+    NUTRITION_STANDARD_VALUE {
+        bigint standard_group_id PK,FK
+        bigint nutrient_id PK,FK
+        decimal recommended_amount
+        decimal upper_limit_amount
+        varchar basis
     }
 ```
 
-## 권장 무결성 제약 조건
+## 핵심 제약
 
-- `USER.email`: `UNIQUE (email)`
-- `USER_PROFILE`: `PRIMARY KEY (user_id)`
-- `USER_CAMPUS`: `CHECK (effective_to IS NULL OR effective_to >= effective_from)`
-- `USER_CAMPUS`: `UNIQUE (user_id, campus_id, effective_from)`
-- `USER_TARGET`: `CHECK (effective_to IS NULL OR effective_to >= effective_from)`
-- `USER_TARGET`: 사용자별 `ACTIVE` 목표 1건만 허용 (Partial Unique Index 권장)
-- `USER_ALLERGY`: `UNIQUE (user_id, allergy_id)`
-- `FOOD_ALIAS`: `UNIQUE (food_id, normalized_alias)`
-- `FOOD_CATEGORY.category_code`: `UNIQUE (category_code)`
-- `FOOD_CATEGORY_MAP`: `UNIQUE (food_id, category_id)`
-- `FOOD_CATEGORY_MAP`: 음식별 `is_primary_yn = true`는 1건만 허용 (Partial Unique Index 권장)
-- `INGREDIENT_MASTER.normalized_name`: `UNIQUE (normalized_name)`
-- `NUTRIENT_MASTER.nutrient_code`: `UNIQUE (nutrient_code)`
-- `FOOD_NUTRIENT`: `UNIQUE (food_id, nutrient_id)`
-- `DINING_MENU`: `UNIQUE (dining_hall_id, menu_date, meal_type)`
-- `DINING_MENU_ITEM`: `UNIQUE (menu_id, menu_name)`
-- `MENU_ITEM_FOOD_MAP`: `UNIQUE (menu_item_id, food_id)`
-- `MENU_ITEM_ALLERGY`: `UNIQUE (menu_item_id, allergy_id)`
-- `MENU_ITEM_INGREDIENT`: `UNIQUE (menu_item_id, ingredient_id)`
-- `MENU_ITEM_NUTRIENT`: `UNIQUE (menu_item_id, nutrient_id)`
-- `MEAL_LOG`: `UNIQUE (user_id, log_date, meal_type)`
-- `MEAL_LOG_ITEM`: `CHECK ((food_id IS NULL) <> (menu_item_id IS NULL))`
-- `MEAL_FEEDBACK`: `UNIQUE (meal_log_id)`
-- `NEXT_MEAL_GUIDE`: `CHECK (recommended_food_id IS NOT NULL OR recommended_menu_item_id IS NOT NULL)`
-- `WEEKLY_FEEDBACK`: `UNIQUE (user_id, week_start_date, week_end_date)`
+- `user_account.email`은 전역 유니크다.
+- `student_verifications`는 `(university_id, student_email)` 유니크로 학교별 인증 이메일 중복을 막는다.
+- `user_health_profile.user_id`는 PK이자 FK라 사용자당 프로필은 1개만 존재한다.
+- `cafeteria_menu`는 `(dining_place_id, meal_type_id, served_date)` 유니크다.
+- `cafeteria_menu_option`은 `(menu_id, option_name)` 유니크다.
+- `diet_entry`는 `(user_id, meal_type_id, consumed_date)` 유니크라 하루 한 끼 기록을 하나로 모은다.
+- `food_alias`는 `(food_id, normalized_alias)` 유니크다.
+- `food_nutrient_value`와 `nutrition_standard_value`는 복합 PK로 영양소별 값을 관리한다.
