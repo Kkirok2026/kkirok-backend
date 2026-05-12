@@ -36,7 +36,7 @@ public class UserService {
                                sv.student_email,
                                sv.status as verification_status
                         from user_account u
-                        join universities univ on univ.university_id = u.primary_university_id
+                        left join universities univ on univ.university_id = u.primary_university_id
                         join user_health_profile p on p.user_id = u.user_id
                         left join student_verifications sv on sv.user_id = u.user_id and sv.university_id = univ.university_id
                         where u.user_id = ?
@@ -45,11 +45,7 @@ public class UserService {
                         rs.getLong("user_id"),
                         rs.getString("email"),
                         rs.getString("name"),
-                        new UniversityResponse(
-                                rs.getLong("university_id"),
-                                rs.getString("university_code"),
-                                rs.getString("university_name")
-                        ),
+                        universityResponse(rs.getObject("university_id", Long.class), rs.getString("university_code"), rs.getString("university_name")),
                         new HealthProfileResponse(
                                 rs.getString("gender"),
                                 rs.getBigDecimal("height_cm"),
@@ -63,6 +59,13 @@ public class UserService {
                 ),
                 userId
         ).stream().findFirst().orElseThrow(() -> DomainException.notFound("USER_NOT_FOUND", "사용자를 찾을 수 없습니다."));
+    }
+
+    private UniversityResponse universityResponse(Long universityId, String universityCode, String universityName) {
+        if (universityId == null) {
+            return null;
+        }
+        return new UniversityResponse(universityId, universityCode, universityName);
     }
 
     @Transactional

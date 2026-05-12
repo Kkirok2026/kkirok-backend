@@ -2,6 +2,8 @@ package com.database2026.backend.auth;
 
 import com.database2026.backend.auth.AuthDtos.AuthResponse;
 import com.database2026.backend.auth.AuthDtos.LoginRequest;
+import com.database2026.backend.auth.AuthDtos.SchoolEmailVerificationRequest;
+import com.database2026.backend.auth.AuthDtos.SchoolEmailVerificationResponse;
 import com.database2026.backend.auth.AuthDtos.SignupRequest;
 import com.database2026.backend.common.ApiResponse;
 import io.swagger.v3.oas.annotations.Operation;
@@ -31,11 +33,19 @@ public class AuthController {
     }
 
     @PostMapping("/signup")
-    @Operation(summary = "회원가입", description = "학교 이메일 도메인을 검증하고 BMI를 자동 계산해 프로필에 저장합니다.")
+    @Operation(summary = "회원가입", description = "학교 이메일 인증코드를 검증하고 학교/BMI 프로필을 저장합니다.")
     ResponseEntity<ApiResponse<AuthResponse>> signup(@Valid @RequestBody SignupRequest request) {
         return ResponseEntity
                 .status(HttpStatus.CREATED)
                 .body(ApiResponse.success(authService.signup(request)));
+    }
+
+    @PostMapping("/school-email-verifications")
+    @Operation(summary = "학교 이메일 인증코드 발급", description = "선택한 학교의 허용 이메일 도메인을 확인한 뒤 회원가입용 인증코드를 발급합니다.")
+    ApiResponse<SchoolEmailVerificationResponse> requestSchoolEmailVerification(
+            @Valid @RequestBody SchoolEmailVerificationRequest request
+    ) {
+        return ApiResponse.success(authService.requestSchoolEmailVerification(request));
     }
 
     @PostMapping("/login")

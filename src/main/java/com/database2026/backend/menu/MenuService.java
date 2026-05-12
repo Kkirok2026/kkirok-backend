@@ -30,7 +30,9 @@ public class MenuService {
     }
 
     public UniversityListResponse universities() {
-        List<UniversityItem> items = jdbcTemplate.query("""
+        List<UniversityItem> items = new ArrayList<>();
+        items.add(new UniversityItem(null, "NONE", "선택 안함"));
+        items.addAll(jdbcTemplate.query("""
                         select university_id, university_code, university_name
                         from universities
                         where is_active = true
@@ -41,7 +43,7 @@ public class MenuService {
                         rs.getString("university_code"),
                         rs.getString("university_name")
                 )
-        );
+        ));
         return new UniversityListResponse(items);
     }
 
@@ -108,6 +110,24 @@ public class MenuService {
                 ))
                 .toList();
         return new MenuCompareResponse(universityId, date, mealTypeCode, items);
+    }
+
+    public void assertUserCanCompare(long userId, long universityId) {
+        Long selectedUniversityId = jdbcTemplate.query("""
+                        select primary_university_id
+                        from user_account
+                        where user_id = ?
+                          and status = 'ACTIVE'
+                        """,
+                (rs, rowNum) -> (Long) rs.getObject("primary_university_id"),
+                userId
+        ).stream().findFirst().orElseThrow(() -> DomainException.notFound("USER_NOT_FOUND", "사용자를 찾을 수 없습니다."));
+        if (selectedUniversityId == null) {
+            throw DomainException.badRequest("UNIVERSITY_SELECTION_REQUIRED", "식당 메뉴 비교를 이용하려면 대학교를 선택해야 합니다.");
+        }
+        if (selectedUniversityId != universityId) {
+            throw DomainException.badRequest("UNIVERSITY_SELECTION_MISMATCH", "선택한 대학교의 식당 메뉴만 비교할 수 있습니다.");
+        }
     }
 
     private List<MenuOptionRow> menuOptionRows(long universityId, LocalDate date, String mealTypeCode) {

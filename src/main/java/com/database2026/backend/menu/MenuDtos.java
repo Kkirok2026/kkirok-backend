@@ -61,6 +61,12 @@ public final class MenuDtos {
     ) {
     }
 
+    public record InhaMenuCrawlResponse(
+            Integer importedCount,
+            List<String> warnings
+    ) {
+    }
+
     public record MenuOptionCompareItem(
             Long optionId,
             String diningPlaceName,
