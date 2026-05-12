@@ -8,7 +8,6 @@ import com.database2026.backend.auth.AuthDtos.SignupRequest;
 import com.database2026.backend.common.DomainException;
 import com.database2026.backend.support.SqlSupport;
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.util.Locale;
@@ -73,14 +72,12 @@ public class AuthService {
 
     @Transactional
     public AuthResponse signup(SignupRequest request) {
-        validateGender(request.gender());
         String email = normalizeEmail(request.email());
         assertEmailAvailable(email);
         if (request.universityId() != null) {
             validateUniversityEmail(request.universityId(), email);
             consumeSignupVerificationCode(request.universityId(), email, request.verificationCode());
         }
-        BigDecimal bmi = calculateBmi(request.heightCm(), request.weightKg());
 
         long userId;
         try {
@@ -97,11 +94,6 @@ public class AuthService {
             throw DomainException.conflict("EMAIL_ALREADY_EXISTS", "이미 가입된 이메일입니다.");
         }
 
-        sqlSupport.update("""
-                insert into user_health_profile (user_id, height_cm, weight_kg, gender, bmi)
-                values (?, ?, ?, ?, ?)
-                """, userId, request.heightCm(), request.weightKg(), request.gender(), bmi);
-
         if (request.universityId() != null) {
             sqlSupport.update("""
                     insert into student_verifications (user_id, university_id, student_email, status, verified_at)
@@ -110,7 +102,7 @@ public class AuthService {
         }
 
         String token = authSessionService.createSession(userId);
-        return new AuthResponse(userId, request.universityId(), token, bmi);
+        return new AuthResponse(userId, request.universityId(), token, null, false);
     }
 
     @Transactional
@@ -118,7 +110,7 @@ public class AuthService {
         UserLoginRow user = jdbcTemplate.query("""
                         select u.user_id, u.primary_university_id, u.password_hash, p.bmi
                         from user_account u
-                        join user_health_profile p on p.user_id = u.user_id
+                        left join user_health_profile p on p.user_id = u.user_id
                         where u.email = ? and u.status = 'ACTIVE'
                         """,
                 (rs, rowNum) -> new UserLoginRow(
@@ -142,7 +134,7 @@ public class AuthService {
 
         jdbcTemplate.update("update user_account set last_login_at = current_timestamp where user_id = ?", user.userId());
         String token = authSessionService.createSession(user.userId());
-        return new AuthResponse(user.userId(), user.universityId(), token, user.bmi());
+        return new AuthResponse(user.userId(), user.universityId(), token, user.bmi(), user.bmi() != null);
     }
 
     private void assertEmailAvailable(String email) {
@@ -249,17 +241,6 @@ public class AuthService {
 
     private String generateVerificationCode() {
         return "%06d".formatted(secureRandom.nextInt(1_000_000));
-    }
-
-    private BigDecimal calculateBmi(BigDecimal heightCm, BigDecimal weightKg) {
-        BigDecimal heightM = heightCm.divide(BigDecimal.valueOf(100), 6, RoundingMode.HALF_UP);
-        return weightKg.divide(heightM.multiply(heightM), 2, RoundingMode.HALF_UP);
-    }
-
-    private void validateGender(String gender) {
-        if (!"MALE".equals(gender) && !"FEMALE".equals(gender) && !"OTHER".equals(gender)) {
-            throw DomainException.badRequest("GENDER_INVALID", "gender는 MALE, FEMALE, OTHER 중 하나여야 합니다.");
-        }
     }
 
     private record UserLoginRow(Long userId, Long universityId, String passwordHash, BigDecimal bmi) {

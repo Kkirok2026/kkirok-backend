@@ -33,7 +33,7 @@ public class AuthController {
     }
 
     @PostMapping("/signup")
-    @Operation(summary = "회원가입", description = "학교 이메일 인증코드를 검증하고 학교/BMI 프로필을 저장합니다.")
+    @Operation(summary = "회원가입", description = "학교 이메일 인증코드를 검증하고 계정을 생성합니다. 건강 프로필은 가입 후 별도로 입력합니다.")
     ResponseEntity<ApiResponse<AuthResponse>> signup(@Valid @RequestBody SignupRequest request) {
         return ResponseEntity
                 .status(HttpStatus.CREATED)

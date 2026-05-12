@@ -51,7 +51,7 @@
 
 `POST /auth/signup`
 
-학교를 선택한 경우 학교 이메일 인증코드를 검증하고, 인증 성공 시 사용자의 대학교와 키/몸무게/성별 기반 BMI를 저장한다. 대학교를 선택하지 않는 회원가입도 허용한다.
+학교를 선택한 경우 학교 이메일 인증코드를 검증하고, 인증 성공 시 계정을 생성한다. 키/몸무게/성별은 회원가입 이후 프로필 입력 단계에서 저장한다. 대학교를 선택하지 않는 회원가입도 허용한다.
 
 대학교를 선택한 회원가입은 학교 이메일 인증코드를 먼저 발급해야 한다.
 
@@ -74,10 +74,7 @@
   "verificationCode": "123456",
   "password": "P@ssw0rd!",
   "name": "테스터",
-  "universityId": 2,
-  "gender": "FEMALE",
-  "heightCm": 164.3,
-  "weightKg": 58.2
+  "universityId": 2
 }
 ```
 
@@ -92,7 +89,8 @@
     "userId": 1,
     "universityId": 2,
     "accessToken": "opaque-token",
-    "bmi": 21.56
+    "bmi": null,
+    "profileCompleted": false
   }
 }
 ```
@@ -122,13 +120,19 @@
 
 `GET /users/me`
 
-프로필, BMI, 학교 인증 상태를 반환한다.
+프로필, BMI, 학교 인증 상태를 반환한다. 프로필 입력 전에는 `profile`이 `null`, `profileCompleted`가 `false`다.
+
+### 회원 탈퇴
+
+`DELETE /users/me`
+
+현재 로그인한 계정을 삭제한다. 삭제 시 계정, 로그인 세션, 건강 프로필, 학교 인증 정보, 식단 기록/항목, 알레르기 음식, 학교 이메일 인증코드를 함께 삭제한다.
 
 ### 건강 프로필 수정
 
 `PUT /users/me/profile`
 
-키/몸무게/성별을 수정하고 BMI를 다시 계산한다.
+회원가입 후 키/몸무게/성별을 처음 입력하거나 수정하고 BMI를 다시 계산한다.
 
 ```json
 {
@@ -137,6 +141,31 @@
   "weightKg": 57.4
 }
 ```
+
+### 내 알레르기 음식 관리
+
+사용자는 자유입력 대신 음식 검색 결과에서 `foodId`를 선택해 알레르기 음식을 저장한다. 음식 검색과 알레르기 등록은 식약처 음식 마스터(`MFDS_INTEGRATED`)만 대상으로 하며, 식당 메뉴 원문은 알레르기 음식으로 직접 저장하지 않는다.
+
+포함 재료 기반 경고는 추후 `food_ingredient` 또는 표준 알레르겐 매핑으로 확장한다. 현재 단계에서는 사용자가 선택한 음식 자체를 기준으로 알레르기를 저장한다.
+
+조회:
+
+`GET /users/me/allergies`
+
+추가:
+
+`POST /users/me/allergies`
+
+```json
+{
+  "foodId": 3001,
+  "reactionNote": "먹으면 두드러기"
+}
+```
+
+삭제:
+
+`DELETE /users/me/allergies/{foodId}`
 
 ## 3. 학교/식당/메뉴
 
@@ -160,7 +189,9 @@
 
 `GET /menus/compare?universityId=2&date=2026-05-11&mealType=LUNCH`
 
-`Authorization: Bearer <access_token>`이 필요하다. 대학을 선택하지 않은 사용자는 `UNIVERSITY_SELECTION_REQUIRED` 오류를 받으며, 자신의 선택 대학이 아닌 학교의 메뉴 비교는 `UNIVERSITY_SELECTION_MISMATCH` 오류를 받는다. 응답의 각 옵션은 `caloriesKcal`, `carbG`, `proteinG`, `fatG`, `sugarG`, `sodiumMg` 합계를 포함한다.
+`Authorization: Bearer <access_token>`이 필요하다. 대학을 선택하지 않은 사용자는 `UNIVERSITY_SELECTION_REQUIRED` 오류를 받으며, 자신의 선택 대학이 아닌 학교의 메뉴 비교는 `UNIVERSITY_SELECTION_MISMATCH` 오류를 받는다. 응답의 각 옵션은 요청 시점에 `cafeteria_menu_item`과 식약처 음식 영양값을 조인해 `caloriesKcal`, `carbG`, `proteinG`, `fatG`, `sugarG`, `sodiumMg` 합계를 계산한다.
+
+식당 메뉴 원문은 `food` 마스터에 저장하지 않는다. 메뉴 항목이 식약처 음식과 아직 매핑되지 않은 경우 해당 항목의 영양값은 0으로 계산되고, 원문 메뉴명은 메뉴 옵션/항목에 남는다.
 
 ### 인하대 학생식당 메뉴 크롤링
 
@@ -174,7 +205,7 @@
 
 `GET /foods/search?q=닭가슴살&limit=20`
 
-음식명과 `food_alias`를 함께 검색한다. 프론트에서는 한글 쿼리를 URL 인코딩해야 한다.
+식약처 음식 마스터(`MFDS_INTEGRATED`)의 음식명과 `food_alias`를 함께 검색한다. 식당 메뉴 원문은 검색 결과에 포함하지 않는다. 프론트에서는 한글 쿼리를 URL 인코딩해야 한다.
 
 ### 음식 상세
 
@@ -189,6 +220,7 @@
 `POST /meal-logs`
 
 `foodId` 또는 `menuOptionId` 중 하나로 항목을 추가한다. `menuOptionId`를 넣으면 해당 식당 메뉴 옵션의 구성 음식을 식단 항목으로 펼쳐 저장한다.
+식당 메뉴 항목이 식약처 음식과 매핑되지 않은 경우에는 원문 항목명만 식단 기록에 남고 영양 합계에는 반영되지 않는다.
 
 ```json
 {

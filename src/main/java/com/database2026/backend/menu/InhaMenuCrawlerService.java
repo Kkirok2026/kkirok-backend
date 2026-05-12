@@ -2,7 +2,6 @@ package com.database2026.backend.menu;
 
 import com.database2026.backend.common.DomainException;
 import com.database2026.backend.menu.MenuDtos.InhaMenuCrawlResponse;
-import com.database2026.backend.support.SqlSupport;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.net.URI;
@@ -35,12 +34,10 @@ public class InhaMenuCrawlerService {
     private static final Pattern KCAL_PATTERN = Pattern.compile("(\\d{2,4})\\s*[kK][cC][aA][lL]");
 
     private final JdbcTemplate jdbcTemplate;
-    private final SqlSupport sqlSupport;
     private final HttpClient httpClient;
 
-    public InhaMenuCrawlerService(JdbcTemplate jdbcTemplate, SqlSupport sqlSupport) {
+    public InhaMenuCrawlerService(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
-        this.sqlSupport = sqlSupport;
         this.httpClient = HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .build();
@@ -68,13 +65,15 @@ public class InhaMenuCrawlerService {
         int importedCount = 0;
         for (CrawledMenu menu : menus) {
             long menuId = upsertMenu(diningPlaceId, menu);
-            long foodId = upsertOptionFood(menu);
             long optionId = upsertMenuOption(menuId, menu);
             jdbcTemplate.update("delete from cafeteria_menu_item where option_id = ?", optionId);
-            sqlSupport.update("""
-                    insert into cafeteria_menu_item (option_id, food_id, raw_item_name, amount_g)
-                    values (?, ?, ?, ?)
-                    """, optionId, foodId, menu.optionName(), BigDecimal.valueOf(100));
+            for (String rawItemName : splitMenuItems(menu.optionName())) {
+                Long foodId = matchedFoodId(rawItemName);
+                jdbcTemplate.update("""
+                        insert into cafeteria_menu_item (option_id, food_id, raw_item_name, amount_g)
+                        values (?, ?, ?, ?)
+                        """, optionId, foodId, rawItemName, BigDecimal.valueOf(100));
+            }
             importedCount++;
         }
 
@@ -320,45 +319,56 @@ public class InhaMenuCrawlerService {
         ).getFirst();
     }
 
-    private long upsertOptionFood(CrawledMenu menu) {
-        String sourceCode = "INHA_STUDENT_%s_%s_%08x".formatted(
-                menu.servedDate(),
-                menu.mealType(),
-                menu.optionName().hashCode()
-        );
-        Optional<Long> existingFoodId = jdbcTemplate.query("""
-                        select food_id
-                        from food
-                        where source_name = 'INHA_STUDENT_MENU'
-                          and source_food_code = ?
-                        """,
-                (rs, rowNum) -> rs.getLong("food_id"),
-                sourceCode
-        ).stream().findFirst();
-
-        long foodId = existingFoodId.orElseGet(() -> sqlSupport.insert("""
-                insert into food (source_name, source_food_code, food_name, default_serving_g, source_category)
-                values ('INHA_STUDENT_MENU', ?, ?, ?, ?)
-                """, sourceCode, menu.optionName(), BigDecimal.valueOf(100), menu.categoryLabel()));
-        if (existingFoodId.isPresent()) {
-            jdbcTemplate.update("""
-                    update food
-                    set food_name = ?, source_category = ?
-                    where food_id = ?
-                    """, menu.optionName(), menu.categoryLabel(), foodId);
-        }
-        upsertNutrients(foodId, BigDecimal.valueOf(menu.caloriesKcal() == null ? 0 : menu.caloriesKcal()));
-        return foodId;
+    private List<String> splitMenuItems(String optionName) {
+        List<String> items = Pattern.compile("\\s*(/|\\n|,)\\s*")
+                .splitAsStream(optionName)
+                .map(String::trim)
+                .filter(item -> !item.isBlank())
+                .toList();
+        return items.isEmpty() ? List.of(optionName) : items;
     }
 
-    private void upsertNutrients(long foodId, BigDecimal caloriesKcal) {
-        for (NutrientAmount nutrient : NutrientAmount.defaultAmounts(caloriesKcal)) {
-            jdbcTemplate.update("""
-                    insert into food_nutrient_value (food_id, nutrient_id, amount_per_100g)
-                    values (?, (select nutrient_id from nutrient where nutrient_code = ?), ?)
-                    on duplicate key update amount_per_100g = values(amount_per_100g)
-                    """, foodId, nutrient.code(), nutrient.amount());
+    private Long matchedFoodId(String rawItemName) {
+        for (String candidate : foodMatchCandidates(rawItemName)) {
+            Optional<Long> foodId = jdbcTemplate.query("""
+                            select f.food_id
+                            from food f
+                            where f.source_name = 'MFDS_INTEGRATED'
+                              and lower(f.food_name) = lower(?)
+                            union
+                            select a.food_id
+                            from food_alias a
+                            join food f on f.food_id = a.food_id
+                            where f.source_name = 'MFDS_INTEGRATED'
+                              and lower(a.normalized_alias) = lower(?)
+                            limit 1
+                            """,
+                    (rs, rowNum) -> rs.getLong("food_id"),
+                    candidate,
+                    candidate
+            ).stream().findFirst();
+            if (foodId.isPresent()) {
+                return foodId.get();
+            }
         }
+        return null;
+    }
+
+    private List<String> foodMatchCandidates(String rawItemName) {
+        String cleaned = rawItemName
+                .replaceAll("\\([^)]*\\)", "")
+                .replaceAll("^[가-힣A-Za-z0-9]+\\)", "")
+                .trim();
+        if (cleaned.isBlank()) {
+            return List.of(rawItemName);
+        }
+        if (cleaned.contains("*")) {
+            String primary = cleaned.substring(0, cleaned.indexOf('*')).trim();
+            if (!primary.isBlank() && !primary.equals(cleaned)) {
+                return List.of(cleaned, primary);
+            }
+        }
+        return List.of(cleaned);
     }
 
     private long mealTypeId(String mealTypeCode) {
@@ -389,19 +399,5 @@ public class InhaMenuCrawlerService {
             String categoryLabel,
             Integer caloriesKcal
     ) {
-    }
-
-    private record NutrientAmount(String code, BigDecimal amount) {
-
-        static List<NutrientAmount> defaultAmounts(BigDecimal caloriesKcal) {
-            return List.of(
-                    new NutrientAmount("CALORIES_KCAL", caloriesKcal),
-                    new NutrientAmount("CARB_G", BigDecimal.ZERO),
-                    new NutrientAmount("PROTEIN_G", BigDecimal.ZERO),
-                    new NutrientAmount("FAT_G", BigDecimal.ZERO),
-                    new NutrientAmount("SUGAR_G", BigDecimal.ZERO),
-                    new NutrientAmount("SODIUM_MG", BigDecimal.ZERO)
-            );
-        }
     }
 }

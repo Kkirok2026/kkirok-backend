@@ -38,3 +38,8 @@ out/
 
 ### Local secrets ###
 src/main/resources/application-local.properties
+
+### Local data files ###
+codex_data/
+.DS_Store
+**/.DS_Store

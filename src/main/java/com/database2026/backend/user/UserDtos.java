@@ -6,6 +6,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import java.math.BigDecimal;
+import java.util.List;
 
 public final class UserDtos {
 
@@ -25,6 +26,7 @@ public final class UserDtos {
             String name,
             UniversityResponse university,
             HealthProfileResponse profile,
+            Boolean profileCompleted,
             StudentVerificationResponse studentVerification
     ) {
     }
@@ -43,6 +45,24 @@ public final class UserDtos {
     public record StudentVerificationResponse(
             String studentEmail,
             String status
+    ) {
+    }
+
+    public record FoodAllergyAddRequest(
+            @NotNull Long foodId,
+            String reactionNote
+    ) {
+    }
+
+    public record FoodAllergyListResponse(List<FoodAllergyItem> items) {
+    }
+
+    public record FoodAllergyItem(
+            Long allergyId,
+            Long foodId,
+            String foodName,
+            String sourceCategory,
+            String reactionNote
     ) {
     }
 }

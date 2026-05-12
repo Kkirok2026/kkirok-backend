@@ -1,11 +1,8 @@
 package com.database2026.backend.auth;
 
-import io.swagger.v3.oas.annotations.media.Schema;
-import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Positive;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
@@ -19,10 +16,7 @@ public final class AuthDtos {
             String verificationCode,
             @NotBlank String password,
             @NotBlank String name,
-            Long universityId,
-            @NotBlank @Schema(allowableValues = {"MALE", "FEMALE", "OTHER"}) String gender,
-            @NotNull @DecimalMin("1.0") BigDecimal heightCm,
-            @NotNull @Positive BigDecimal weightKg
+            Long universityId
     ) {
     }
 
@@ -36,7 +30,8 @@ public final class AuthDtos {
             Long userId,
             Long universityId,
             String accessToken,
-            BigDecimal bmi
+            BigDecimal bmi,
+            Boolean profileCompleted
     ) {
     }
 

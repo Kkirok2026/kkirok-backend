@@ -152,7 +152,6 @@ public class MealService {
                                mi.amount_g
                         from cafeteria_menu_item mi
                         where mi.option_id = ?
-                          and mi.food_id is not null
                         order by mi.menu_item_id
                         """,
                 (rs, rowNum) -> new MenuFoodItem(
@@ -170,7 +169,7 @@ public class MealService {
         }
     }
 
-    private void insertDietItem(long mealLogId, long foodId, Long sourceOptionId, String itemName, BigDecimal amountG) {
+    private void insertDietItem(long mealLogId, Long foodId, Long sourceOptionId, String itemName, BigDecimal amountG) {
         if (amountG == null || amountG.compareTo(BigDecimal.ZERO) <= 0) {
             throw DomainException.badRequest("AMOUNT_INVALID", "amountG는 0보다 커야 합니다.");
         }
@@ -185,6 +184,7 @@ public class MealService {
                         select food_id, food_name, default_serving_g
                         from food
                         where food_id = ?
+                          and source_name = 'MFDS_INTEGRATED'
                         """,
                 (rs, rowNum) -> new FoodPortion(
                         rs.getLong("food_id"),
@@ -210,15 +210,15 @@ public class MealService {
                                coalesce(sum(case when n.nutrient_code = 'SUGAR_G' then v.amount_per_100g * i.amount_g / 100 end), 0) as sugar_g,
                                coalesce(sum(case when n.nutrient_code = 'SODIUM_MG' then v.amount_per_100g * i.amount_g / 100 end), 0) as sodium_mg
                         from diet_entry_item i
-                        join food_nutrient_value v on v.food_id = i.food_id
-                        join nutrient n on n.nutrient_id = v.nutrient_id
+                        left join food_nutrient_value v on v.food_id = i.food_id
+                        left join nutrient n on n.nutrient_id = v.nutrient_id
                         where i.diet_entry_id = ?
                         group by i.diet_item_id, i.food_id, i.source_option_id, i.item_name_snapshot, i.amount_g, i.is_excluded
                         order by i.diet_item_id
                         """,
                 (rs, rowNum) -> new MealLogItemResponse(
                         rs.getLong("diet_item_id"),
-                        rs.getLong("food_id"),
+                        rs.getObject("food_id", Long.class),
                         (Long) rs.getObject("source_option_id"),
                         rs.getString("item_name_snapshot"),
                         rs.getBigDecimal("amount_g"),
@@ -238,8 +238,8 @@ public class MealService {
                                coalesce(sum(case when n.nutrient_code = 'SUGAR_G' then v.amount_per_100g * i.amount_g / 100 end), 0) as sugar_g,
                                coalesce(sum(case when n.nutrient_code = 'SODIUM_MG' then v.amount_per_100g * i.amount_g / 100 end), 0) as sodium_mg
                         from diet_entry_item i
-                        join food_nutrient_value v on v.food_id = i.food_id
-                        join nutrient n on n.nutrient_id = v.nutrient_id
+                        left join food_nutrient_value v on v.food_id = i.food_id
+                        left join nutrient n on n.nutrient_id = v.nutrient_id
                         where i.diet_entry_id = ?
                           and i.is_excluded = false
                         """,
@@ -258,8 +258,8 @@ public class MealService {
                                coalesce(sum(case when n.nutrient_code = 'SODIUM_MG' then v.amount_per_100g * i.amount_g / 100 end), 0) as sodium_mg
                         from diet_entry d
                         join diet_entry_item i on i.diet_entry_id = d.diet_entry_id
-                        join food_nutrient_value v on v.food_id = i.food_id
-                        join nutrient n on n.nutrient_id = v.nutrient_id
+                        left join food_nutrient_value v on v.food_id = i.food_id
+                        left join nutrient n on n.nutrient_id = v.nutrient_id
                         where d.user_id = ?
                           and d.consumed_date = ?
                           and i.is_excluded = false

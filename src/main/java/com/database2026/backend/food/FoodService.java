@@ -42,13 +42,16 @@ public class FoodService {
                         from food f
                         join food_nutrient_value v on v.food_id = f.food_id
                         join nutrient n on n.nutrient_id = v.nutrient_id
-                        where lower(f.food_name) like ?
-                           or exists (
+                        where f.source_name = 'MFDS_INTEGRATED'
+                          and (
+                              lower(f.food_name) like ?
+                              or exists (
                                select 1
                                from food_alias a
                                where a.food_id = f.food_id
                                  and lower(a.normalized_alias) like ?
-                           )
+                              )
+                          )
                         group by f.food_id, f.food_name, f.default_serving_g
                         order by f.food_name
                         limit ?
@@ -86,6 +89,7 @@ public class FoodService {
                         join food_nutrient_value v on v.food_id = f.food_id
                         join nutrient n on n.nutrient_id = v.nutrient_id
                         where f.food_id = ?
+                          and f.source_name = 'MFDS_INTEGRATED'
                         group by f.food_id, f.source_name, f.source_food_code, f.food_name, f.source_category, f.default_serving_g
                         """,
                 (rs, rowNum) -> new FoodDetail(
