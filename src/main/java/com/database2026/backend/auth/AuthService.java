@@ -24,7 +24,7 @@ public class AuthService {
     private final JdbcTemplate jdbcTemplate;
     private final SqlSupport sqlSupport;
     private final PasswordEncoder passwordEncoder;
-    private final AuthSessionService authSessionService;
+    private final JwtAuthService jwtAuthService;
     private final SchoolEmailVerificationSender schoolEmailVerificationSender;
     private final SecureRandom secureRandom = new SecureRandom();
 
@@ -32,13 +32,13 @@ public class AuthService {
             JdbcTemplate jdbcTemplate,
             SqlSupport sqlSupport,
             PasswordEncoder passwordEncoder,
-            AuthSessionService authSessionService,
+            JwtAuthService jwtAuthService,
             SchoolEmailVerificationSender schoolEmailVerificationSender
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.sqlSupport = sqlSupport;
         this.passwordEncoder = passwordEncoder;
-        this.authSessionService = authSessionService;
+        this.jwtAuthService = jwtAuthService;
         this.schoolEmailVerificationSender = schoolEmailVerificationSender;
     }
 
@@ -107,7 +107,7 @@ public class AuthService {
                     """, userId, universityId, email, "VERIFIED", LocalDateTime.now());
         }
 
-        String token = authSessionService.createSession(userId);
+        String token = jwtAuthService.createAccessToken(userId);
         return new AuthResponse(userId, universityId, token, null, false);
     }
 
@@ -139,7 +139,7 @@ public class AuthService {
         }
 
         jdbcTemplate.update("update user_account set last_login_at = current_timestamp where user_id = ?", user.userId());
-        String token = authSessionService.createSession(user.userId());
+        String token = jwtAuthService.createAccessToken(user.userId());
         return new AuthResponse(user.userId(), user.universityId(), token, user.bmi(), user.bmi() != null);
     }
 

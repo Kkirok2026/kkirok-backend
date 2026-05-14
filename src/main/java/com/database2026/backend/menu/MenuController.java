@@ -1,6 +1,6 @@
 package com.database2026.backend.menu;
 
-import com.database2026.backend.auth.AuthSessionService;
+import com.database2026.backend.auth.JwtAuthService;
 import com.database2026.backend.common.ApiResponse;
 import com.database2026.backend.menu.MenuDtos.DailyMenuResponse;
 import com.database2026.backend.menu.MenuDtos.DiningPlaceListResponse;
@@ -25,16 +25,16 @@ import org.springframework.web.bind.annotation.RestController;
 @Tag(name = "Dining Menus", description = "대학교 식당과 크롤링 메뉴 조회")
 public class MenuController {
 
-    private final AuthSessionService authSessionService;
+    private final JwtAuthService jwtAuthService;
     private final MenuService menuService;
     private final InhaMenuCrawlerService inhaMenuCrawlerService;
 
     public MenuController(
-            AuthSessionService authSessionService,
+            JwtAuthService jwtAuthService,
             MenuService menuService,
             InhaMenuCrawlerService inhaMenuCrawlerService
     ) {
-        this.authSessionService = authSessionService;
+        this.jwtAuthService = jwtAuthService;
         this.menuService = menuService;
         this.inhaMenuCrawlerService = inhaMenuCrawlerService;
     }
@@ -71,7 +71,7 @@ public class MenuController {
             @RequestParam String mealType,
             @RequestParam(required = false) Long studentOptionId
     ) {
-        long userId = authSessionService.requireUserId(authorization);
+        long userId = jwtAuthService.requireUserId(authorization);
         menuService.assertUserCanCompare(userId, universityId);
         return ApiResponse.success(menuService.compare(userId, universityId, date, mealType, studentOptionId));
     }

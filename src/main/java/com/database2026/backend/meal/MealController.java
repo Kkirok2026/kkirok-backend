@@ -1,17 +1,19 @@
 package com.database2026.backend.meal;
 
-import com.database2026.backend.auth.AuthSessionService;
+import com.database2026.backend.auth.JwtAuthService;
 import com.database2026.backend.common.ApiResponse;
 import com.database2026.backend.meal.MealDtos.DailySummaryResponse;
 import com.database2026.backend.meal.MealDtos.FoodMealLogItemsAddRequest;
 import com.database2026.backend.meal.MealDtos.MealLogCreateRequest;
 import com.database2026.backend.meal.MealDtos.MealLogListResponse;
 import com.database2026.backend.meal.MealDtos.MealLogResponse;
+import com.database2026.backend.meal.MealDtos.MenuOptionMealLogAddRequest;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -32,11 +34,11 @@ import org.springframework.web.bind.annotation.RestController;
 @SecurityRequirement(name = "bearerAuth")
 public class MealController {
 
-    private final AuthSessionService authSessionService;
+    private final JwtAuthService jwtAuthService;
     private final MealService mealService;
 
-    public MealController(AuthSessionService authSessionService, MealService mealService) {
-        this.authSessionService = authSessionService;
+    public MealController(JwtAuthService jwtAuthService, MealService mealService) {
+        this.jwtAuthService = jwtAuthService;
         this.mealService = mealService;
     }
 
@@ -49,7 +51,7 @@ public class MealController {
             @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization,
             @Valid @RequestBody MealLogCreateRequest request
     ) {
-        long userId = authSessionService.requireUserId(authorization);
+        long userId = jwtAuthService.requireUserId(authorization);
         return ResponseEntity
                 .status(HttpStatus.CREATED)
                 .body(ApiResponse.success(mealService.create(userId, request)));
@@ -61,7 +63,7 @@ public class MealController {
             @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
     ) {
-        long userId = authSessionService.requireUserId(authorization);
+        long userId = jwtAuthService.requireUserId(authorization);
         return ApiResponse.success(mealService.listByDate(userId, date));
     }
 
@@ -71,7 +73,7 @@ public class MealController {
             @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization,
             @PathVariable long mealLogId
     ) {
-        long userId = authSessionService.requireUserId(authorization);
+        long userId = jwtAuthService.requireUserId(authorization);
         return ApiResponse.success(mealService.mealLog(userId, mealLogId));
     }
 
@@ -85,8 +87,21 @@ public class MealController {
             @PathVariable long mealLogId,
             @Valid @RequestBody FoodMealLogItemsAddRequest request
     ) {
-        long userId = authSessionService.requireUserId(authorization);
+        long userId = jwtAuthService.requireUserId(authorization);
         return ApiResponse.success(mealService.addFoodItems(userId, mealLogId, request));
+    }
+
+    @PostMapping("/meal-logs/from-menu-option")
+    @Operation(
+            summary = "식당 메뉴 선택 후 식단에 바로 추가",
+            description = "식당 메뉴 조회/비교 결과의 optionId를 보내면 해당 메뉴의 날짜/끼니 식단 기록을 찾거나 새로 만든 뒤, 메뉴 구성 항목을 식단에 추가합니다. 학교 이메일로 인증된 본인 학교 메뉴만 추가할 수 있습니다."
+    )
+    ApiResponse<MealLogResponse> addMenuOption(
+            @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization,
+            @Valid @RequestBody MenuOptionMealLogAddRequest request
+    ) {
+        long userId = jwtAuthService.requireUserId(authorization);
+        return ApiResponse.success(mealService.addMenuOption(userId, request));
     }
 
     @PatchMapping("/meal-logs/{mealLogId}/items/{dietItemId}/exclude")
@@ -97,17 +112,33 @@ public class MealController {
             @PathVariable long dietItemId,
             @RequestParam(defaultValue = "true") boolean excluded
     ) {
-        long userId = authSessionService.requireUserId(authorization);
+        long userId = jwtAuthService.requireUserId(authorization);
         return ApiResponse.success(mealService.setExcluded(userId, mealLogId, dietItemId, excluded));
     }
 
     @GetMapping("/home/daily-summary")
-    @Operation(summary = "홈 일일 영양 요약", description = "그날 식단에 추가한 음식의 총 칼로리, 탄수화물, 단백질, 지방을 계산해 반환합니다. 사용자 프로필이 있으면 기준 초과 경고도 함께 반환합니다.")
+    @Operation(
+            summary = "홈 일일 영양 요약",
+            description = "그날 식단에 추가한 음식의 총 영양성분, 사용자 프로필 기반 권장 섭취량, 탄단지 에너지 비율, 기준 초과/부족 경고를 반환합니다."
+    )
     ApiResponse<DailySummaryResponse> dailySummary(
             @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date
     ) {
-        long userId = authSessionService.requireUserId(authorization);
+        long userId = jwtAuthService.requireUserId(authorization);
         return ApiResponse.success(mealService.dailySummary(userId, date));
+    }
+
+    @GetMapping("/home/yesterday-feedback")
+    @Operation(
+            summary = "전날 식사 피드백",
+            description = "어제 날짜의 식단 합계를 기준으로 권장 섭취량 대비 열량, 탄단지 비율, 당류, 나트륨 경고를 반환합니다."
+    )
+    ApiResponse<DailySummaryResponse> yesterdayFeedback(
+            @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization
+    ) {
+        long userId = jwtAuthService.requireUserId(authorization);
+        LocalDate yesterday = LocalDate.now(ZoneId.of("Asia/Seoul")).minusDays(1);
+        return ApiResponse.success(mealService.dailySummary(userId, yesterday));
     }
 }

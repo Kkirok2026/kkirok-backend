@@ -5,18 +5,27 @@ import com.database2026.backend.common.NutrientTotals;
 import com.database2026.backend.meal.MealDtos.DailySummaryResponse;
 import com.database2026.backend.meal.MealDtos.FoodMealLogItemRequest;
 import com.database2026.backend.meal.MealDtos.FoodMealLogItemsAddRequest;
+import com.database2026.backend.meal.MealDtos.MacroEnergyRatio;
+import com.database2026.backend.meal.MealDtos.MealAllergyWarning;
 import com.database2026.backend.meal.MealDtos.MealLogCreateRequest;
 import com.database2026.backend.meal.MealDtos.MealLogItemResponse;
 import com.database2026.backend.meal.MealDtos.MealLogListResponse;
 import com.database2026.backend.meal.MealDtos.MealLogResponse;
+import com.database2026.backend.meal.MealDtos.MenuOptionMealLogAddRequest;
 import com.database2026.backend.meal.MealDtos.NutritionWarning;
+import com.database2026.backend.meal.MealDtos.RecommendedNutritionTargets;
 import com.database2026.backend.support.SqlSupport;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -24,6 +33,12 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class MealService {
+
+    private static final String DEFAULT_ACTIVITY_LEVEL = "LOW_ACTIVE";
+    private static final BigDecimal SODIUM_MAX_MG = BigDecimal.valueOf(2300);
+    private static final String TARGET_BASIS =
+            "IOM DRI 성인 EER 공식 + 2025 한국인 영양소 섭취기준 에너지 적정비율"
+                    + "(탄수화물 50-65%, 단백질 10-20%, 지방 15-30%, 총당류 20% 이내)";
 
     private final JdbcTemplate jdbcTemplate;
     private final SqlSupport sqlSupport;
@@ -45,6 +60,17 @@ public class MealService {
         for (FoodMealLogItemRequest item : request.items()) {
             insertFoodItem(userId, mealLogId, item.foodId(), item.amountG());
         }
+        return mealLog(userId, mealLogId);
+    }
+
+    @Transactional
+    public MealLogResponse addMenuOption(long userId, MenuOptionMealLogAddRequest request) {
+        MenuOptionContext option = menuOptionContext(request.menuOptionId());
+        assertUserCanUseMenuOption(userId, option.universityId());
+        long mealLogId = findMealLogId(userId, option.servedDate(), option.mealType())
+                .orElseGet(() -> createMealLog(userId, option.servedDate(), option.mealType(), request.memo()));
+        assertMenuOptionNotAlreadyAdded(mealLogId, option.optionId());
+        insertMenuOptionItems(mealLogId, option);
         return mealLog(userId, mealLogId);
     }
 
@@ -91,7 +117,7 @@ public class MealService {
                 header.logDate(),
                 header.mealType(),
                 header.memo(),
-                mealLogItems(mealLogId),
+                mealLogItems(userId, mealLogId),
                 entryTotals(mealLogId)
         );
     }
@@ -113,8 +139,10 @@ public class MealService {
 
     public DailySummaryResponse dailySummary(long userId, LocalDate date) {
         NutrientTotals totals = dailyTotals(userId, date);
-        List<NutritionWarning> warnings = warnings(userId, totals);
-        return new DailySummaryResponse(date, totals, warnings);
+        RecommendedNutritionTargets targets = recommendedTargets(userId);
+        MacroEnergyRatio macroRatios = macroRatios(totals);
+        List<NutritionWarning> warnings = feedbackWarnings(totals, targets, macroRatios);
+        return new DailySummaryResponse(date, totals, targets, macroRatios, warnings);
     }
 
     private long createMealLog(long userId, LocalDate logDate, String mealType, String memo) {
@@ -133,6 +161,17 @@ public class MealService {
         FoodPortion food = foodPortion(userId, foodId);
         BigDecimal amountG = Optional.ofNullable(requestedAmountG).orElse(food.defaultServingG());
         insertDietItem(mealLogId, food.foodId(), null, food.foodName(), amountG);
+    }
+
+    private void insertMenuOptionItems(long mealLogId, MenuOptionContext option) {
+        List<CafeteriaMenuItem> menuItems = cafeteriaMenuItems(option.optionId());
+        if (menuItems.isEmpty()) {
+            insertDietItem(mealLogId, null, option.optionId(), option.optionName(), BigDecimal.valueOf(100));
+            return;
+        }
+        for (CafeteriaMenuItem item : menuItems) {
+            insertDietItem(mealLogId, item.foodId(), option.optionId(), item.rawItemName(), item.amountG());
+        }
     }
 
     private void insertDietItem(long mealLogId, Long foodId, Long sourceOptionId, String itemName, BigDecimal amountG) {
@@ -173,7 +212,99 @@ public class MealService {
         ).stream().findFirst().orElseThrow(() -> DomainException.notFound("FOOD_NOT_FOUND", "음식을 찾을 수 없습니다."));
     }
 
-    private List<MealLogItemResponse> mealLogItems(long mealLogId) {
+    private MenuOptionContext menuOptionContext(long optionId) {
+        return jdbcTemplate.query("""
+                        select o.option_id,
+                               o.option_name,
+                               dp.university_id,
+                               m.served_date,
+                               mt.meal_type_code
+                        from cafeteria_menu_option o
+                        join cafeteria_menu m on m.menu_id = o.menu_id
+                        join dining_place dp on dp.dining_place_id = m.dining_place_id
+                        join meal_type mt on mt.meal_type_id = m.meal_type_id
+                        where o.option_id = ?
+                          and o.is_available = true
+                          and dp.is_active = true
+                        """,
+                (rs, rowNum) -> new MenuOptionContext(
+                        rs.getLong("option_id"),
+                        rs.getString("option_name"),
+                        rs.getLong("university_id"),
+                        rs.getObject("served_date", LocalDate.class),
+                        rs.getString("meal_type_code")
+                ),
+                optionId
+        ).stream().findFirst().orElseThrow(() -> DomainException.notFound("MENU_OPTION_NOT_FOUND", "식당 메뉴를 찾을 수 없습니다."));
+    }
+
+    private List<CafeteriaMenuItem> cafeteriaMenuItems(long optionId) {
+        return jdbcTemplate.query("""
+                        select food_id, raw_item_name, amount_g
+                        from cafeteria_menu_item
+                        where option_id = ?
+                        order by menu_item_id
+                        """,
+                (rs, rowNum) -> new CafeteriaMenuItem(
+                        rs.getObject("food_id", Long.class),
+                        rs.getString("raw_item_name"),
+                        rs.getBigDecimal("amount_g")
+                ),
+                optionId
+        );
+    }
+
+    private void assertUserCanUseMenuOption(long userId, long universityId) {
+        Long selectedUniversityId = jdbcTemplate.query("""
+                        select primary_university_id
+                        from user_account
+                        where user_id = ?
+                          and status = 'ACTIVE'
+                        """,
+                (rs, rowNum) -> (Long) rs.getObject("primary_university_id"),
+                userId
+        ).stream().findFirst().orElseThrow(() -> DomainException.notFound("USER_NOT_FOUND", "사용자를 찾을 수 없습니다."));
+        if (selectedUniversityId == null) {
+            throw DomainException.badRequest("SCHOOL_EMAIL_USER_REQUIRED", "식당 메뉴 추가는 학교 이메일로 인증된 사용자만 이용할 수 있습니다.");
+        }
+        if (!selectedUniversityId.equals(universityId)) {
+            throw DomainException.badRequest("UNIVERSITY_SELECTION_MISMATCH", "본인 학교의 식당 메뉴만 식단에 추가할 수 있습니다.");
+        }
+    }
+
+    private Optional<Long> findMealLogId(long userId, LocalDate logDate, String mealType) {
+        return jdbcTemplate.query("""
+                        select d.diet_entry_id
+                        from diet_entry d
+                        join meal_type mt on mt.meal_type_id = d.meal_type_id
+                        where d.user_id = ?
+                          and d.consumed_date = ?
+                          and mt.meal_type_code = ?
+                        """,
+                (rs, rowNum) -> rs.getLong("diet_entry_id"),
+                userId,
+                logDate,
+                mealType
+        ).stream().findFirst();
+    }
+
+    private void assertMenuOptionNotAlreadyAdded(long mealLogId, long optionId) {
+        Integer count = jdbcTemplate.queryForObject("""
+                        select count(*)
+                        from diet_entry_item
+                        where diet_entry_id = ?
+                          and source_option_id = ?
+                        """,
+                Integer.class,
+                mealLogId,
+                optionId
+        );
+        if (count != null && count > 0) {
+            throw DomainException.conflict("MENU_OPTION_ALREADY_ADDED", "이미 이 식당 메뉴가 식단에 추가되어 있습니다.");
+        }
+    }
+
+    private List<MealLogItemResponse> mealLogItems(long userId, long mealLogId) {
         return jdbcTemplate.query("""
                         select i.diet_item_id,
                                i.food_id,
@@ -194,17 +325,152 @@ public class MealService {
                         group by i.diet_item_id, i.food_id, i.source_option_id, i.item_name_snapshot, i.amount_g, i.is_excluded
                         order by i.diet_item_id
                         """,
-                (rs, rowNum) -> new MealLogItemResponse(
-                        rs.getLong("diet_item_id"),
-                        rs.getObject("food_id", Long.class),
-                        (Long) rs.getObject("source_option_id"),
-                        rs.getString("item_name_snapshot"),
-                        rs.getBigDecimal("amount_g"),
-                        rs.getBoolean("is_excluded"),
-                        NutrientTotals.from(rs)
-                ),
+                (rs, rowNum) -> {
+                    Long foodId = rs.getObject("food_id", Long.class);
+                    String itemName = rs.getString("item_name_snapshot");
+                    return new MealLogItemResponse(
+                            rs.getLong("diet_item_id"),
+                            foodId,
+                            (Long) rs.getObject("source_option_id"),
+                            itemName,
+                            rs.getBigDecimal("amount_g"),
+                            rs.getBoolean("is_excluded"),
+                            NutrientTotals.from(rs),
+                            allergyWarnings(userId, foodId, itemName)
+                    );
+                },
                 mealLogId
         );
+    }
+
+    private List<MealAllergyWarning> allergyWarnings(long userId, Long foodId, String itemName) {
+        Map<String, MealAllergyWarning> warnings = new LinkedHashMap<>();
+        for (UserFoodAllergy allergy : userFoodAllergies(userId)) {
+            if (foodId != null && foodId.equals(allergy.foodId())) {
+                addAllergyWarning(warnings, new MealAllergyWarning(
+                        "FOOD_MATCH",
+                        allergy.foodName(),
+                        itemName,
+                        "FOOD",
+                        allergy.foodName() + " 알레르기 음식과 일치합니다. 알레르기 유발 음식이 포함되어 있을 수 있습니다."
+                ));
+            }
+        }
+
+        String normalizedItemName = normalizeForAllergyMatch(itemName);
+        for (UserIngredientKeyword keyword : userIngredientKeywords(userId)) {
+            if (!keyword.normalizedKeyword().isBlank() && normalizedItemName.contains(keyword.normalizedKeyword())) {
+                addAllergyWarning(warnings, new MealAllergyWarning(
+                        "POSSIBLE_INGREDIENT_NAME_MATCH",
+                        keyword.allergyName(),
+                        itemName,
+                        keyword.source(),
+                        keyword.allergyName() + " 원재료가 이름에 포함되어 있습니다. 알레르기 유발 원재료가 포함되어 있을 수 있습니다."
+                ));
+            }
+        }
+
+        if (foodId != null) {
+            for (FoodIngredientMatch match : foodIngredientMatches(userId, foodId)) {
+                addAllergyWarning(warnings, new MealAllergyWarning(
+                        "FOOD_INGREDIENT_MATCH",
+                        match.allergyName(),
+                        match.ingredientName(),
+                        "FOOD_INGREDIENT",
+                        match.allergyName() + " 원재료가 음식 원재료 목록에 포함되어 있습니다."
+                ));
+            }
+        }
+        return List.copyOf(warnings.values());
+    }
+
+    private List<UserFoodAllergy> userFoodAllergies(long userId) {
+        return jdbcTemplate.query("""
+                        select a.food_id, f.food_name
+                        from user_food_allergy a
+                        join food f on f.food_id = a.food_id
+                        where a.user_id = ?
+                        """,
+                (rs, rowNum) -> new UserFoodAllergy(rs.getLong("food_id"), rs.getString("food_name")),
+                userId
+        );
+    }
+
+    private List<UserIngredientKeyword> userIngredientKeywords(long userId) {
+        Set<UserIngredientKeyword> keywords = new LinkedHashSet<>();
+        keywords.addAll(jdbcTemplate.query("""
+                        select allergy_name, normalized_allergy_name as keyword, 'USER_INPUT' as source
+                        from user_ingredient_allergy
+                        where user_id = ?
+                        """,
+                (rs, rowNum) -> new UserIngredientKeyword(
+                        rs.getString("allergy_name"),
+                        rs.getString("keyword"),
+                        rs.getString("source")
+                ),
+                userId
+        ));
+        keywords.addAll(jdbcTemplate.query("""
+                        select uia.allergy_name, i.normalized_name as keyword, 'INGREDIENT' as source
+                        from user_ingredient_allergy uia
+                        join ingredient i on i.ingredient_id = uia.ingredient_id
+                        where uia.user_id = ?
+                        """,
+                (rs, rowNum) -> new UserIngredientKeyword(
+                        rs.getString("allergy_name"),
+                        rs.getString("keyword"),
+                        rs.getString("source")
+                ),
+                userId
+        ));
+        keywords.addAll(jdbcTemplate.query("""
+                        select uia.allergy_name, ia.normalized_alias as keyword, 'INGREDIENT_ALIAS' as source
+                        from user_ingredient_allergy uia
+                        join ingredient_alias ia on ia.ingredient_id = uia.ingredient_id
+                        where uia.user_id = ?
+                        """,
+                (rs, rowNum) -> new UserIngredientKeyword(
+                        rs.getString("allergy_name"),
+                        rs.getString("keyword"),
+                        rs.getString("source")
+                ),
+                userId
+        ));
+        return List.copyOf(keywords);
+    }
+
+    private List<FoodIngredientMatch> foodIngredientMatches(long userId, long foodId) {
+        return jdbcTemplate.query("""
+                        select distinct uia.allergy_name, i.ingredient_name
+                        from user_ingredient_allergy uia
+                        join food_ingredient fi on fi.ingredient_id = uia.ingredient_id
+                        join ingredient i on i.ingredient_id = fi.ingredient_id
+                        where uia.user_id = ?
+                          and fi.food_id = ?
+                        """,
+                (rs, rowNum) -> new FoodIngredientMatch(
+                        rs.getString("allergy_name"),
+                        rs.getString("ingredient_name")
+                ),
+                userId,
+                foodId
+        );
+    }
+
+    private void addAllergyWarning(Map<String, MealAllergyWarning> warnings, MealAllergyWarning warning) {
+        warnings.putIfAbsent(
+                warning.warningType() + "|" + warning.allergyName() + "|" + warning.matchedText(),
+                warning
+        );
+    }
+
+    private String normalizeForAllergyMatch(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.trim()
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("[\\s_\\-()\\[\\]{}]", "");
     }
 
     private NutrientTotals entryTotals(long mealLogId) {
@@ -248,92 +514,254 @@ public class MealService {
         ).getFirst();
     }
 
-    private List<NutritionWarning> warnings(long userId, NutrientTotals totals) {
-        UserStandardProfile profile = jdbcTemplate.query("""
-                        select gender, bmi
-                        from user_health_profile
-                        where user_id = ?
+    private RecommendedNutritionTargets recommendedTargets(long userId) {
+        NutritionProfile profile = jdbcTemplate.query("""
+                        select u.age,
+                               p.gender,
+                               p.height_cm,
+                               p.weight_kg,
+                               p.activity_level
+                        from user_account u
+                        left join user_health_profile p on p.user_id = u.user_id
+                        where u.user_id = ?
                         """,
-                (rs, rowNum) -> new UserStandardProfile(rs.getString("gender"), rs.getBigDecimal("bmi")),
+                (rs, rowNum) -> new NutritionProfile(
+                        (Integer) rs.getObject("age"),
+                        rs.getString("gender"),
+                        rs.getBigDecimal("height_cm"),
+                        rs.getBigDecimal("weight_kg"),
+                        rs.getString("activity_level")
+                ),
                 userId
         ).stream().findFirst().orElse(null);
 
-        if (profile == null) {
-            return List.of();
+        if (profile == null
+                || profile.age() == null
+                || profile.age() < 9
+                || profile.gender() == null
+                || profile.heightCm() == null
+                || profile.weightKg() == null) {
+            return null;
         }
 
-        Optional<Long> standardGroupId = jdbcTemplate.query("""
-                        select standard_group_id
-                        from nutrition_standard_group
-                        where gender in (?, 'ALL')
-                          and (bmi_min is null or bmi_min <= ?)
-                          and (bmi_max is null or bmi_max >= ?)
-                        order by case when gender = ? then 0 else 1 end
-                        limit 1
-                        """,
-                (rs, rowNum) -> rs.getLong("standard_group_id"),
-                profile.gender(),
-                profile.bmi(),
-                profile.bmi(),
-                profile.gender()
-        ).stream().findFirst();
+        String activityLevel = Optional.ofNullable(profile.activityLevel()).orElse(DEFAULT_ACTIVITY_LEVEL);
+        BigDecimal calories = BigDecimal.valueOf(estimatedEnergyRequirement(profile, activityLevel))
+                .setScale(0, RoundingMode.HALF_UP);
 
-        if (standardGroupId.isEmpty()) {
-            return List.of();
-        }
-
-        List<StandardValue> standards = jdbcTemplate.query("""
-                        select n.nutrient_code,
-                               n.nutrient_name,
-                               v.recommended_amount,
-                               v.upper_limit_amount
-                        from nutrition_standard_value v
-                        join nutrient n on n.nutrient_id = v.nutrient_id
-                        where v.standard_group_id = ?
-                        """,
-                (rs, rowNum) -> new StandardValue(
-                        rs.getString("nutrient_code"),
-                        rs.getString("nutrient_name"),
-                        rs.getBigDecimal("recommended_amount"),
-                        rs.getBigDecimal("upper_limit_amount")
-                ),
-                standardGroupId.get()
+        return new RecommendedNutritionTargets(
+                calories,
+                macroGram(calories, "0.50", 4),
+                macroGram(calories, "0.65", 4),
+                macroGram(calories, "0.10", 4),
+                macroGram(calories, "0.20", 4),
+                macroGram(calories, "0.15", 9),
+                macroGram(calories, "0.30", 9),
+                macroGram(calories, "0.20", 4),
+                SODIUM_MAX_MG,
+                activityLevel,
+                TARGET_BASIS
         );
+    }
 
-        List<NutritionWarning> warnings = new ArrayList<>();
-        for (StandardValue standard : standards) {
-            BigDecimal actual = actualAmount(totals, standard.nutrientCode());
-            if (standard.upperLimitAmount() != null && actual.compareTo(standard.upperLimitAmount()) > 0) {
-                warnings.add(new NutritionWarning(
-                        standard.nutrientCode(),
-                        standard.nutrientName(),
-                        actual,
-                        standard.recommendedAmount(),
-                        standard.upperLimitAmount(),
-                        warningMessage(standard.nutrientCode(), standard.nutrientName())
-                ));
+    private double estimatedEnergyRequirement(NutritionProfile profile, String activityLevel) {
+        double age = profile.age();
+        double weightKg = profile.weightKg().doubleValue();
+        double heightM = profile.heightCm().doubleValue() / 100.0;
+        if (age < 19) {
+            if ("MALE".equals(profile.gender())) {
+                return eerBoy(age, weightKg, heightM, activityLevel);
             }
+            if ("FEMALE".equals(profile.gender())) {
+                return eerGirl(age, weightKg, heightM, activityLevel);
+            }
+            return (eerBoy(age, weightKg, heightM, activityLevel) + eerGirl(age, weightKg, heightM, activityLevel)) / 2.0;
+        }
+        if ("MALE".equals(profile.gender())) {
+            return eerMale(age, weightKg, heightM, activityLevel);
+        }
+        if ("FEMALE".equals(profile.gender())) {
+            return eerFemale(age, weightKg, heightM, activityLevel);
+        }
+        return (eerMale(age, weightKg, heightM, activityLevel) + eerFemale(age, weightKg, heightM, activityLevel)) / 2.0;
+    }
+
+    private double eerMale(double age, double weightKg, double heightM, String activityLevel) {
+        return 662 - 9.53 * age + physicalActivityCoefficient("MALE", activityLevel, true)
+                * (15.91 * weightKg + 539.6 * heightM);
+    }
+
+    private double eerFemale(double age, double weightKg, double heightM, String activityLevel) {
+        return 354 - 6.91 * age + physicalActivityCoefficient("FEMALE", activityLevel, true)
+                * (9.36 * weightKg + 726 * heightM);
+    }
+
+    private double eerBoy(double age, double weightKg, double heightM, String activityLevel) {
+        return 88.5 - 61.9 * age + physicalActivityCoefficient("MALE", activityLevel, false)
+                * (26.7 * weightKg + 903 * heightM) + 25;
+    }
+
+    private double eerGirl(double age, double weightKg, double heightM, String activityLevel) {
+        return 135.3 - 30.8 * age + physicalActivityCoefficient("FEMALE", activityLevel, false)
+                * (10.0 * weightKg + 934 * heightM) + 25;
+    }
+
+    private double physicalActivityCoefficient(String gender, String activityLevel, boolean adult) {
+        String normalized = activityLevel == null ? DEFAULT_ACTIVITY_LEVEL : activityLevel.trim().toUpperCase(Locale.ROOT);
+        if ("MALE".equals(gender)) {
+            return switch (normalized) {
+                case "SEDENTARY" -> 1.00;
+                case "ACTIVE" -> adult ? 1.25 : 1.26;
+                case "VERY_ACTIVE" -> adult ? 1.48 : 1.42;
+                default -> adult ? 1.11 : 1.13;
+            };
+        }
+        return switch (normalized) {
+            case "SEDENTARY" -> 1.00;
+            case "ACTIVE" -> adult ? 1.27 : 1.31;
+            case "VERY_ACTIVE" -> adult ? 1.45 : 1.56;
+            default -> adult ? 1.12 : 1.16;
+        };
+    }
+
+    private BigDecimal macroGram(BigDecimal calories, String ratio, int kcalPerGram) {
+        return calories.multiply(new BigDecimal(ratio))
+                .divide(BigDecimal.valueOf(kcalPerGram), 1, RoundingMode.HALF_UP);
+    }
+
+    private MacroEnergyRatio macroRatios(NutrientTotals totals) {
+        if (totals.caloriesKcal().compareTo(BigDecimal.ZERO) <= 0) {
+            return new MacroEnergyRatio(zeroPercent(), zeroPercent(), zeroPercent(), zeroPercent());
+        }
+        return new MacroEnergyRatio(
+                energyPercent(totals.carbG(), 4, totals.caloriesKcal()),
+                energyPercent(totals.proteinG(), 4, totals.caloriesKcal()),
+                energyPercent(totals.fatG(), 9, totals.caloriesKcal()),
+                energyPercent(totals.sugarG(), 4, totals.caloriesKcal())
+        );
+    }
+
+    private BigDecimal energyPercent(BigDecimal grams, int kcalPerGram, BigDecimal totalCalories) {
+        return grams.multiply(BigDecimal.valueOf(kcalPerGram))
+                .multiply(BigDecimal.valueOf(100))
+                .divide(totalCalories, 1, RoundingMode.HALF_UP);
+    }
+
+    private BigDecimal zeroPercent() {
+        return BigDecimal.ZERO.setScale(1, RoundingMode.HALF_UP);
+    }
+
+    private List<NutritionWarning> feedbackWarnings(
+            NutrientTotals totals,
+            RecommendedNutritionTargets targets,
+            MacroEnergyRatio macroRatios
+    ) {
+        if (targets == null) {
+            return List.of();
+        }
+        List<NutritionWarning> warnings = new ArrayList<>();
+        BigDecimal calorieLowerLimit = targets.caloriesKcal().multiply(new BigDecimal("0.90")).setScale(0, RoundingMode.HALF_UP);
+        BigDecimal calorieUpperLimit = targets.caloriesKcal().multiply(new BigDecimal("1.10")).setScale(0, RoundingMode.HALF_UP);
+        if (totals.caloriesKcal().compareTo(calorieUpperLimit) > 0) {
+            warnings.add(new NutritionWarning(
+                    "CALORIES_HIGH",
+                    "CALORIES_KCAL",
+                    "열량",
+                    totals.caloriesKcal(),
+                    targets.caloriesKcal(),
+                    calorieLowerLimit,
+                    calorieUpperLimit,
+                    "IOM DRI 성인 EER 공식으로 계산한 권장 섭취 열량의 110% 초과",
+                    "해당 날짜의 총 섭취 열량이 권장 섭취 열량보다 높습니다."
+            ));
+        } else if (totals.caloriesKcal().compareTo(calorieLowerLimit) < 0 && totals.caloriesKcal().compareTo(BigDecimal.ZERO) > 0) {
+            warnings.add(new NutritionWarning(
+                    "CALORIES_LOW",
+                    "CALORIES_KCAL",
+                    "열량",
+                    totals.caloriesKcal(),
+                    targets.caloriesKcal(),
+                    calorieLowerLimit,
+                    calorieUpperLimit,
+                    "IOM DRI 성인 EER 공식으로 계산한 권장 섭취 열량의 90% 미만",
+                    "해당 날짜의 총 섭취 열량이 권장 섭취 열량보다 낮습니다."
+            ));
+        }
+        addRatioWarning(warnings, "CARB_RATIO_LOW", "CARB_G", "탄수화물", macroRatios.carbPercent(),
+                "50", "65", "2025 한국인 영양소 섭취기준 탄수화물 에너지 적정비율 50-65%",
+                "탄수화물 에너지 비율이 권장 범위보다 낮습니다.", false);
+        addRatioWarning(warnings, "CARB_RATIO_HIGH", "CARB_G", "탄수화물", macroRatios.carbPercent(),
+                "50", "65", "2025 한국인 영양소 섭취기준 탄수화물 에너지 적정비율 50-65%",
+                "탄수화물 에너지 비율이 권장 범위보다 높습니다.", true);
+        addRatioWarning(warnings, "PROTEIN_RATIO_LOW", "PROTEIN_G", "단백질", macroRatios.proteinPercent(),
+                "10", "20", "2025 한국인 영양소 섭취기준 단백질 에너지 적정비율 10-20%",
+                "단백질 에너지 비율이 권장 범위보다 낮습니다.", false);
+        addRatioWarning(warnings, "PROTEIN_RATIO_HIGH", "PROTEIN_G", "단백질", macroRatios.proteinPercent(),
+                "10", "20", "2025 한국인 영양소 섭취기준 단백질 에너지 적정비율 10-20%",
+                "단백질 에너지 비율이 권장 범위보다 높습니다.", true);
+        addRatioWarning(warnings, "FAT_RATIO_LOW", "FAT_G", "지방", macroRatios.fatPercent(),
+                "15", "30", "2025 한국인 영양소 섭취기준 지방 에너지 적정비율 15-30%",
+                "지방 에너지 비율이 권장 범위보다 낮습니다.", false);
+        addRatioWarning(warnings, "FAT_RATIO_HIGH", "FAT_G", "지방", macroRatios.fatPercent(),
+                "15", "30", "2025 한국인 영양소 섭취기준 지방 에너지 적정비율 15-30%",
+                "지방 에너지 비율이 권장 범위보다 높습니다.", true);
+        if (macroRatios.sugarPercent().compareTo(BigDecimal.valueOf(20)) > 0) {
+            warnings.add(new NutritionWarning(
+                    "SUGAR_RATIO_HIGH",
+                    "SUGAR_G",
+                    "당류",
+                    macroRatios.sugarPercent(),
+                    null,
+                    null,
+                    BigDecimal.valueOf(20),
+                    "2025 한국인 영양소 섭취기준 총당류 에너지 섭취비율 20% 이내",
+                    "당류 에너지 비율이 권장 상한보다 높습니다."
+            ));
+        }
+        if (totals.sodiumMg().compareTo(targets.sodiumMaxMg()) > 0) {
+            warnings.add(new NutritionWarning(
+                    "SODIUM_HIGH",
+                    "SODIUM_MG",
+                    "나트륨",
+                    totals.sodiumMg(),
+                    null,
+                    null,
+                    targets.sodiumMaxMg(),
+                    "2020 한국인 영양소 섭취기준 19-64세 성인 나트륨 만성질환위험감소섭취량 2300mg/일 기준",
+                    "나트륨 섭취량이 기준보다 높습니다."
+            ));
         }
         return warnings;
     }
 
-    private BigDecimal actualAmount(NutrientTotals totals, String nutrientCode) {
-        return switch (nutrientCode) {
-            case "CALORIES_KCAL" -> totals.caloriesKcal();
-            case "CARB_G" -> totals.carbG();
-            case "PROTEIN_G" -> totals.proteinG();
-            case "FAT_G" -> totals.fatG();
-            case "SUGAR_G" -> totals.sugarG();
-            case "SODIUM_MG" -> totals.sodiumMg();
-            default -> BigDecimal.ZERO;
-        };
-    }
-
-    private String warningMessage(String nutrientCode, String nutrientName) {
-        if ("CARB_G".equals(nutrientCode)) {
-            return "오늘 탄수화물 섭취량이 기준 상한보다 높습니다. 다음 끼니는 밥/면류 양을 줄여보세요.";
+    private void addRatioWarning(
+            List<NutritionWarning> warnings,
+            String warningCode,
+            String nutrientCode,
+            String nutrientName,
+            BigDecimal actualPercent,
+            String lowerLimit,
+            String upperLimit,
+            String basis,
+            String message,
+            boolean high
+    ) {
+        BigDecimal lower = new BigDecimal(lowerLimit);
+        BigDecimal upper = new BigDecimal(upperLimit);
+        boolean shouldAdd = high ? actualPercent.compareTo(upper) > 0 : actualPercent.compareTo(lower) < 0;
+        if (!shouldAdd || actualPercent.compareTo(BigDecimal.ZERO) == 0) {
+            return;
         }
-        return "오늘 " + nutrientName + " 섭취량이 기준 상한보다 높습니다.";
+        warnings.add(new NutritionWarning(
+                warningCode,
+                nutrientCode,
+                nutrientName,
+                actualPercent,
+                null,
+                lower,
+                upper,
+                basis,
+                message
+        ));
     }
 
     private long mealTypeId(String mealType) {
@@ -372,14 +800,33 @@ public class MealService {
     private record FoodPortion(Long foodId, String foodName, BigDecimal defaultServingG) {
     }
 
-    private record UserStandardProfile(String gender, BigDecimal bmi) {
+    private record MenuOptionContext(
+            Long optionId,
+            String optionName,
+            Long universityId,
+            LocalDate servedDate,
+            String mealType
+    ) {
     }
 
-    private record StandardValue(
-            String nutrientCode,
-            String nutrientName,
-            BigDecimal recommendedAmount,
-            BigDecimal upperLimitAmount
+    private record CafeteriaMenuItem(Long foodId, String rawItemName, BigDecimal amountG) {
+    }
+
+    private record UserFoodAllergy(Long foodId, String foodName) {
+    }
+
+    private record UserIngredientKeyword(String allergyName, String normalizedKeyword, String source) {
+    }
+
+    private record FoodIngredientMatch(String allergyName, String ingredientName) {
+    }
+
+    private record NutritionProfile(
+            Integer age,
+            String gender,
+            BigDecimal heightCm,
+            BigDecimal weightKg,
+            String activityLevel
     ) {
     }
 }

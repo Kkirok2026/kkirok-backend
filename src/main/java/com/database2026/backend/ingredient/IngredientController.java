@@ -1,6 +1,6 @@
 package com.database2026.backend.ingredient;
 
-import com.database2026.backend.auth.AuthSessionService;
+import com.database2026.backend.auth.JwtAuthService;
 import com.database2026.backend.common.ApiResponse;
 import com.database2026.backend.ingredient.IngredientDtos.FoodIngredientListResponse;
 import com.database2026.backend.ingredient.IngredientDtos.FoodIngredientSyncResponse;
@@ -28,11 +28,11 @@ import org.springframework.web.bind.annotation.RestController;
 @Tag(name = "Ingredients", description = "원재료 검색과 원재료 기반 알레르기")
 public class IngredientController {
 
-    private final AuthSessionService authSessionService;
+    private final JwtAuthService jwtAuthService;
     private final IngredientService ingredientService;
 
-    public IngredientController(AuthSessionService authSessionService, IngredientService ingredientService) {
-        this.authSessionService = authSessionService;
+    public IngredientController(JwtAuthService jwtAuthService, IngredientService ingredientService) {
+        this.jwtAuthService = jwtAuthService;
         this.ingredientService = ingredientService;
     }
 
@@ -51,7 +51,7 @@ public class IngredientController {
     ApiResponse<UserIngredientAllergyListResponse> userIngredientAllergies(
             @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization
     ) {
-        long userId = authSessionService.requireUserId(authorization);
+        long userId = jwtAuthService.requireUserId(authorization);
         return ApiResponse.success(ingredientService.userIngredientAllergies(userId));
     }
 
@@ -62,7 +62,7 @@ public class IngredientController {
             @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization,
             @Valid @RequestBody UserIngredientAllergyAddRequest request
     ) {
-        long userId = authSessionService.requireUserId(authorization);
+        long userId = jwtAuthService.requireUserId(authorization);
         return ApiResponse.success(ingredientService.addUserIngredientAllergy(userId, request));
     }
 
@@ -73,7 +73,7 @@ public class IngredientController {
             @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization,
             @Valid @RequestBody UserIngredientAllergyBulkAddRequest request
     ) {
-        long userId = authSessionService.requireUserId(authorization);
+        long userId = jwtAuthService.requireUserId(authorization);
         return ApiResponse.success(ingredientService.addUserIngredientAllergies(userId, request));
     }
 
@@ -84,7 +84,7 @@ public class IngredientController {
             @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization,
             @PathVariable long allergyId
     ) {
-        long userId = authSessionService.requireUserId(authorization);
+        long userId = jwtAuthService.requireUserId(authorization);
         return ApiResponse.success(ingredientService.deleteUserIngredientAllergy(userId, allergyId));
     }
 

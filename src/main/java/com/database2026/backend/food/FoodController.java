@@ -1,6 +1,6 @@
 package com.database2026.backend.food;
 
-import com.database2026.backend.auth.AuthSessionService;
+import com.database2026.backend.auth.JwtAuthService;
 import com.database2026.backend.common.ApiResponse;
 import com.database2026.backend.food.FoodDtos.CustomFoodCreateRequest;
 import com.database2026.backend.food.FoodDtos.FoodDetail;
@@ -25,11 +25,11 @@ import org.springframework.web.bind.annotation.RestController;
 @Tag(name = "Foods", description = "공개 음식 영양성분 데이터 검색")
 public class FoodController {
 
-    private final AuthSessionService authSessionService;
+    private final JwtAuthService jwtAuthService;
     private final FoodService foodService;
 
-    public FoodController(AuthSessionService authSessionService, FoodService foodService) {
-        this.authSessionService = authSessionService;
+    public FoodController(JwtAuthService jwtAuthService, FoodService foodService) {
+        this.jwtAuthService = jwtAuthService;
         this.foodService = foodService;
     }
 
@@ -43,7 +43,7 @@ public class FoodController {
             @RequestParam String q,
             @RequestParam(defaultValue = "20") int limit
     ) {
-        Optional<Long> userId = authSessionService.optionalUserId(authorization);
+        Optional<Long> userId = jwtAuthService.optionalUserId(authorization);
         return ApiResponse.success(foodService.search(q, limit, userId));
     }
 
@@ -56,7 +56,7 @@ public class FoodController {
             @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization,
             @Valid @RequestBody CustomFoodCreateRequest request
     ) {
-        long userId = authSessionService.requireUserId(authorization);
+        long userId = jwtAuthService.requireUserId(authorization);
         return ApiResponse.success(foodService.createCustomFood(userId, request));
     }
 

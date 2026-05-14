@@ -41,6 +41,13 @@ public final class MealDtos {
     ) {
     }
 
+    @Schema(description = "식당 메뉴 선택 후 식단에 바로 추가하는 요청")
+    public record MenuOptionMealLogAddRequest(
+            @NotNull @Schema(description = "식당 메뉴 조회/비교 API에서 받은 optionId", example = "12") Long menuOptionId,
+            @Schema(description = "식단 기록이 새로 생성될 때 저장할 메모. 이미 같은 날짜/끼니 식단이 있으면 기존 메모를 유지합니다.", example = "학생식당 한상한담") String memo
+    ) {
+    }
+
     public record MealLogResponse(
             Long mealLogId,
             LocalDate logDate,
@@ -58,7 +65,17 @@ public final class MealDtos {
             String itemName,
             BigDecimal amountG,
             Boolean excluded,
-            NutrientTotals nutrients
+            NutrientTotals nutrients,
+            List<MealAllergyWarning> allergyWarnings
+    ) {
+    }
+
+    public record MealAllergyWarning(
+            String warningType,
+            String allergyName,
+            String matchedText,
+            String source,
+            String message
     ) {
     }
 
@@ -68,16 +85,44 @@ public final class MealDtos {
     public record DailySummaryResponse(
             LocalDate date,
             NutrientTotals totals,
+            RecommendedNutritionTargets recommendedTargets,
+            MacroEnergyRatio macroRatios,
             List<NutritionWarning> warnings
     ) {
     }
 
+    public record RecommendedNutritionTargets(
+            BigDecimal caloriesKcal,
+            BigDecimal carbMinG,
+            BigDecimal carbMaxG,
+            BigDecimal proteinMinG,
+            BigDecimal proteinMaxG,
+            BigDecimal fatMinG,
+            BigDecimal fatMaxG,
+            BigDecimal sugarMaxG,
+            BigDecimal sodiumMaxMg,
+            String activityLevel,
+            String basis
+    ) {
+    }
+
+    public record MacroEnergyRatio(
+            BigDecimal carbPercent,
+            BigDecimal proteinPercent,
+            BigDecimal fatPercent,
+            BigDecimal sugarPercent
+    ) {
+    }
+
     public record NutritionWarning(
+            String warningCode,
             String nutrientCode,
             String nutrientName,
             BigDecimal actualAmount,
             BigDecimal recommendedAmount,
+            BigDecimal lowerLimitAmount,
             BigDecimal upperLimitAmount,
+            String basis,
             String message
     ) {
     }

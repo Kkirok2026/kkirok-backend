@@ -25,11 +25,11 @@ import org.springframework.web.bind.annotation.RestController;
 public class AuthController {
 
     private final AuthService authService;
-    private final AuthSessionService authSessionService;
+    private final JwtAuthService jwtAuthService;
 
-    public AuthController(AuthService authService, AuthSessionService authSessionService) {
+    public AuthController(AuthService authService, JwtAuthService jwtAuthService) {
         this.authService = authService;
-        this.authSessionService = authSessionService;
+        this.jwtAuthService = jwtAuthService;
     }
 
     @PostMapping("/signup")
@@ -58,7 +58,7 @@ public class AuthController {
     @Operation(summary = "로그아웃", description = "현재 bearer token을 폐기합니다.")
     @SecurityRequirement(name = "bearerAuth")
     ApiResponse<Void> logout(@RequestHeader(HttpHeaders.AUTHORIZATION) String authorization) {
-        authSessionService.revoke(authorization);
+        jwtAuthService.revoke(authorization);
         return ApiResponse.empty();
     }
 }

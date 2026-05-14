@@ -12,6 +12,7 @@ import com.database2026.backend.user.UserDtos.UniversityResponse;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.List;
+import java.util.Locale;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -39,6 +40,7 @@ public class UserService {
                                p.weight_kg,
                                p.target_weight_kg,
                                p.bmi,
+                               p.activity_level,
                                sv.student_email,
                                sv.status as verification_status
                         from user_account u
@@ -58,7 +60,8 @@ public class UserService {
                                 rs.getBigDecimal("height_cm"),
                                 rs.getBigDecimal("weight_kg"),
                                 rs.getBigDecimal("target_weight_kg"),
-                                rs.getBigDecimal("bmi")
+                                rs.getBigDecimal("bmi"),
+                                rs.getString("activity_level")
                         ),
                         rs.getBigDecimal("bmi") != null,
                         new StudentVerificationResponse(
@@ -82,29 +85,46 @@ public class UserService {
             BigDecimal heightCm,
             BigDecimal weightKg,
             BigDecimal targetWeightKg,
-            BigDecimal bmi
+            BigDecimal bmi,
+            String activityLevel
     ) {
         if (gender == null) {
             return null;
         }
-        return new HealthProfileResponse(gender, heightCm, weightKg, targetWeightKg, bmi);
+        return new HealthProfileResponse(gender, heightCm, weightKg, targetWeightKg, bmi, activityLevel);
     }
 
     @Transactional
     public HealthProfileResponse updateProfile(long userId, ProfileUpdateRequest request) {
         validateGender(request.gender());
+        String activityLevel = normalizeActivityLevel(request.activityLevel());
         BigDecimal bmi = calculateBmi(request.heightCm(), request.weightKg());
+        if (request.age() != null) {
+            jdbcTemplate.update("""
+                    update user_account
+                    set age = ?
+                    where user_id = ?
+                    """, request.age(), userId);
+        }
         jdbcTemplate.update("""
-                insert into user_health_profile (user_id, height_cm, weight_kg, target_weight_kg, gender, bmi)
-                values (?, ?, ?, ?, ?, ?)
+                insert into user_health_profile (user_id, height_cm, weight_kg, target_weight_kg, gender, bmi, activity_level)
+                values (?, ?, ?, ?, ?, ?, ?)
                 on duplicate key update height_cm = values(height_cm),
                                         weight_kg = values(weight_kg),
                                         target_weight_kg = values(target_weight_kg),
                                         gender = values(gender),
                                         bmi = values(bmi),
+                                        activity_level = values(activity_level),
                                         updated_at = current_timestamp
-                """, userId, request.heightCm(), request.weightKg(), request.targetWeightKg(), request.gender(), bmi);
-        return new HealthProfileResponse(request.gender(), request.heightCm(), request.weightKg(), request.targetWeightKg(), bmi);
+                """, userId, request.heightCm(), request.weightKg(), request.targetWeightKg(), request.gender(), bmi, activityLevel);
+        return new HealthProfileResponse(
+                request.gender(),
+                request.heightCm(),
+                request.weightKg(),
+                request.targetWeightKg(),
+                bmi,
+                activityLevel
+        );
     }
 
     public FoodAllergyListResponse foodAllergies(long userId) {
@@ -227,5 +247,19 @@ public class UserService {
         if (!"MALE".equals(gender) && !"FEMALE".equals(gender) && !"OTHER".equals(gender)) {
             throw DomainException.badRequest("GENDER_INVALID", "gender는 MALE, FEMALE, OTHER 중 하나여야 합니다.");
         }
+    }
+
+    private String normalizeActivityLevel(String activityLevel) {
+        if (activityLevel == null || activityLevel.isBlank()) {
+            return "LOW_ACTIVE";
+        }
+        String normalized = activityLevel.trim().toUpperCase(Locale.ROOT);
+        if (!List.of("SEDENTARY", "LOW_ACTIVE", "ACTIVE", "VERY_ACTIVE").contains(normalized)) {
+            throw DomainException.badRequest(
+                    "ACTIVITY_LEVEL_INVALID",
+                    "activityLevel은 SEDENTARY, LOW_ACTIVE, ACTIVE, VERY_ACTIVE 중 하나여야 합니다."
+            );
+        }
+        return normalized;
     }
 }
