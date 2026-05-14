@@ -12,7 +12,7 @@ public final class MenuDtos {
     public record UniversityListResponse(List<UniversityItem> items) {
     }
 
-    public record UniversityItem(Long universityId, String universityCode, String universityName) {
+    public record UniversityItem(Long universityId, String universityName) {
     }
 
     public record DiningPlaceListResponse(List<DiningPlaceItem> items) {
@@ -48,7 +48,6 @@ public final class MenuDtos {
             String categoryCode,
             String categoryName,
             String optionName,
-            Integer price,
             NutrientTotals nutrients
     ) {
     }
@@ -57,6 +56,7 @@ public final class MenuDtos {
             Long universityId,
             LocalDate date,
             String mealType,
+            Long selectedStudentOptionId,
             List<MenuOptionCompareItem> items
     ) {
     }
@@ -71,9 +71,20 @@ public final class MenuDtos {
             Long optionId,
             String diningPlaceName,
             String diningPlaceType,
+            String categoryCode,
             String categoryName,
             String optionName,
-            NutrientTotals nutrients
+            NutrientTotals nutrients,
+            List<MenuAllergyWarning> allergyWarnings
+    ) {
+    }
+
+    public record MenuAllergyWarning(
+            String warningType,
+            String allergyName,
+            String matchedText,
+            String source,
+            String message
     ) {
     }
 }

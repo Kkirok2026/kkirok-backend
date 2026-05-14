@@ -11,6 +11,7 @@ import com.database2026.backend.user.UserDtos.StudentVerificationResponse;
 import com.database2026.backend.user.UserDtos.UniversityResponse;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.List;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -30,12 +31,13 @@ public class UserService {
                         select u.user_id,
                                u.email,
                                u.name,
+                               u.age,
                                univ.university_id,
-                               univ.university_code,
                                univ.university_name,
                                p.gender,
                                p.height_cm,
                                p.weight_kg,
+                               p.target_weight_kg,
                                p.bmi,
                                sv.student_email,
                                sv.status as verification_status
@@ -49,8 +51,15 @@ public class UserService {
                         rs.getLong("user_id"),
                         rs.getString("email"),
                         rs.getString("name"),
-                        universityResponse(rs.getObject("university_id", Long.class), rs.getString("university_code"), rs.getString("university_name")),
-                        healthProfileResponse(rs.getString("gender"), rs.getBigDecimal("height_cm"), rs.getBigDecimal("weight_kg"), rs.getBigDecimal("bmi")),
+                        (Integer) rs.getObject("age"),
+                        universityResponse(rs.getObject("university_id", Long.class), rs.getString("university_name")),
+                        healthProfileResponse(
+                                rs.getString("gender"),
+                                rs.getBigDecimal("height_cm"),
+                                rs.getBigDecimal("weight_kg"),
+                                rs.getBigDecimal("target_weight_kg"),
+                                rs.getBigDecimal("bmi")
+                        ),
                         rs.getBigDecimal("bmi") != null,
                         new StudentVerificationResponse(
                                 rs.getString("student_email"),
@@ -61,18 +70,24 @@ public class UserService {
         ).stream().findFirst().orElseThrow(() -> DomainException.notFound("USER_NOT_FOUND", "사용자를 찾을 수 없습니다."));
     }
 
-    private UniversityResponse universityResponse(Long universityId, String universityCode, String universityName) {
+    private UniversityResponse universityResponse(Long universityId, String universityName) {
         if (universityId == null) {
             return null;
         }
-        return new UniversityResponse(universityId, universityCode, universityName);
+        return new UniversityResponse(universityId, universityName);
     }
 
-    private HealthProfileResponse healthProfileResponse(String gender, BigDecimal heightCm, BigDecimal weightKg, BigDecimal bmi) {
+    private HealthProfileResponse healthProfileResponse(
+            String gender,
+            BigDecimal heightCm,
+            BigDecimal weightKg,
+            BigDecimal targetWeightKg,
+            BigDecimal bmi
+    ) {
         if (gender == null) {
             return null;
         }
-        return new HealthProfileResponse(gender, heightCm, weightKg, bmi);
+        return new HealthProfileResponse(gender, heightCm, weightKg, targetWeightKg, bmi);
     }
 
     @Transactional
@@ -80,15 +95,16 @@ public class UserService {
         validateGender(request.gender());
         BigDecimal bmi = calculateBmi(request.heightCm(), request.weightKg());
         jdbcTemplate.update("""
-                insert into user_health_profile (user_id, height_cm, weight_kg, gender, bmi)
-                values (?, ?, ?, ?, ?)
+                insert into user_health_profile (user_id, height_cm, weight_kg, target_weight_kg, gender, bmi)
+                values (?, ?, ?, ?, ?, ?)
                 on duplicate key update height_cm = values(height_cm),
                                         weight_kg = values(weight_kg),
+                                        target_weight_kg = values(target_weight_kg),
                                         gender = values(gender),
                                         bmi = values(bmi),
                                         updated_at = current_timestamp
-                """, userId, request.heightCm(), request.weightKg(), request.gender(), bmi);
-        return new HealthProfileResponse(request.gender(), request.heightCm(), request.weightKg(), bmi);
+                """, userId, request.heightCm(), request.weightKg(), request.targetWeightKg(), request.gender(), bmi);
+        return new HealthProfileResponse(request.gender(), request.heightCm(), request.weightKg(), request.targetWeightKg(), bmi);
     }
 
     public FoodAllergyListResponse foodAllergies(long userId) {
@@ -145,6 +161,14 @@ public class UserService {
 
     @Transactional
     public void deleteMe(long userId) {
+        List<Long> customFoodIds = jdbcTemplate.query("""
+                        select food_id
+                        from user_custom_food
+                        where user_id = ?
+                        """,
+                (rs, rowNum) -> rs.getLong("food_id"),
+                userId
+        );
         String email = jdbcTemplate.query("""
                         select email
                         from user_account
@@ -162,6 +186,13 @@ public class UserService {
                 delete from user_account
                 where user_id = ?
                 """, userId);
+        for (Long foodId : customFoodIds) {
+            jdbcTemplate.update("""
+                    delete from food
+                    where food_id = ?
+                      and source_name = 'USER_CUSTOM'
+                    """, foodId);
+        }
     }
 
     private void assertAllergyFoodExists(long foodId) {

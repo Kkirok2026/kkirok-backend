@@ -135,7 +135,8 @@ public class InhaMenuCrawlerService {
                 continue;
             }
 
-            String categoryLabel = categoryLabel(row, leading);
+            String categoryLabel = categoryLabel(row, leading, currentMealType);
+            String categoryCode = categoryCode(categoryLabel, currentMealType);
             for (Map.Entry<Integer, LocalDate> entry : dateColumns.entrySet()) {
                 int cellIndex = entry.getKey();
                 if (cellIndex >= row.size()) {
@@ -150,6 +151,7 @@ public class InhaMenuCrawlerService {
                         entry.getValue(),
                         currentMealType,
                         optionName,
+                        categoryCode,
                         categoryLabel,
                         calories(raw).orElse(null)
                 ));
@@ -201,26 +203,88 @@ public class InhaMenuCrawlerService {
         if (text.contains("저녁") || text.contains("석식")) {
             return Optional.of("DINNER");
         }
-        if (text.contains("간식") || text.contains("라면")) {
+        if (text.contains("간식") || text.contains("식간")) {
             return Optional.of("SNACK");
         }
         return Optional.empty();
     }
 
-    private String categoryLabel(List<String> row, String leading) {
+    private String categoryLabel(List<String> row, String leading, String mealType) {
+        if ("DINNER".equals(mealType)) {
+            return "석식";
+        }
+        String normalizedLeading = normalizeCategoryText(leading);
+        if (normalizedLeading.contains("한상한담")) {
+            return "한상한담";
+        }
+        if (normalizedLeading.contains("oneplate")) {
+            return "ONE PLATE";
+        }
+        if (normalizedLeading.contains("noodle") || normalizedLeading.contains("누들")) {
+            return "Noodle";
+        }
+        if (normalizedLeading.contains("셀프라면")) {
+            return "셀프라면";
+        }
         if (List.of("A", "B").contains(leading)) {
             return leading;
         }
-        if (row.size() > 1 && List.of("A", "B").contains(row.get(1))) {
-            return row.get(1);
+        if (row.size() > 1) {
+            String second = row.get(1);
+            String normalizedSecond = normalizeCategoryText(second);
+            if (normalizedSecond.contains("한상한담")) {
+                return "한상한담";
+            }
+            if (normalizedSecond.contains("oneplate")) {
+                return "ONE PLATE";
+            }
+            if (normalizedSecond.contains("noodle") || normalizedSecond.contains("누들")) {
+                return "Noodle";
+            }
+            if (normalizedSecond.contains("셀프라면")) {
+                return "셀프라면";
+            }
+            if (List.of("A", "B").contains(second)) {
+                return second;
+            }
         }
         if (leading.contains("간편식")) {
             return "간편식";
         }
         if (leading.contains("라면")) {
-            return "식간 라면";
+            return "셀프라면";
         }
         return "학생식당";
+    }
+
+    private String categoryCode(String categoryLabel, String mealType) {
+        if ("DINNER".equals(mealType)) {
+            return "STUDENT_DINNER";
+        }
+        String normalized = normalizeCategoryText(categoryLabel);
+        if (normalized.contains("한상한담")) {
+            return "STUDENT_HANSANG";
+        }
+        if (normalized.contains("oneplate")) {
+            return "STUDENT_ONE_PLATE";
+        }
+        if (normalized.contains("noodle") || normalized.contains("누들")) {
+            return "STUDENT_NOODLE";
+        }
+        if (normalized.contains("셀프라면") || normalized.contains("라면")) {
+            return "STUDENT_SELF_RAMEN";
+        }
+        if (normalized.contains("간편식")) {
+            return "STUDENT_SIMPLE";
+        }
+        return "STUDENT_CRAWLED";
+    }
+
+    private String normalizeCategoryText(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.toLowerCase(Locale.ROOT).replaceAll("[\\s_\\-]", "");
     }
 
     private String optionName(String raw) {
@@ -269,7 +333,7 @@ public class InhaMenuCrawlerService {
                         select dp.dining_place_id
                         from dining_place dp
                         join universities u on u.university_id = dp.university_id
-                        where u.university_code = 'INHA'
+                        where u.university_name = '인하대학교'
                           and dp.dining_place_type = 'STUDENT'
                         limit 1
                         """,
@@ -299,7 +363,7 @@ public class InhaMenuCrawlerService {
     }
 
     private long upsertMenuOption(long menuId, CrawledMenu menu) {
-        Long categoryId = categoryId();
+        Long categoryId = categoryId(menu.categoryCode());
         jdbcTemplate.update("""
                 insert into cafeteria_menu_option (menu_id, category_id, option_name, source_label, is_available)
                 values (?, ?, ?, ?, true)
@@ -382,13 +446,14 @@ public class InhaMenuCrawlerService {
         ).getFirst();
     }
 
-    private Long categoryId() {
+    private Long categoryId(String categoryCode) {
         return jdbcTemplate.query("""
                         select category_id
                         from menu_category
-                        where category_code = 'STUDENT_CRAWLED'
+                        where category_code = ?
                         """,
-                (rs, rowNum) -> rs.getLong("category_id")
+                (rs, rowNum) -> rs.getLong("category_id"),
+                categoryCode
         ).stream().findFirst().orElse(null);
     }
 
@@ -396,6 +461,7 @@ public class InhaMenuCrawlerService {
             LocalDate servedDate,
             String mealType,
             String optionName,
+            String categoryCode,
             String categoryLabel,
             Integer caloriesKcal
     ) {

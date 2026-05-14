@@ -3,8 +3,9 @@ package com.database2026.backend.meal;
 import com.database2026.backend.common.DomainException;
 import com.database2026.backend.common.NutrientTotals;
 import com.database2026.backend.meal.MealDtos.DailySummaryResponse;
+import com.database2026.backend.meal.MealDtos.FoodMealLogItemRequest;
+import com.database2026.backend.meal.MealDtos.FoodMealLogItemsAddRequest;
 import com.database2026.backend.meal.MealDtos.MealLogCreateRequest;
-import com.database2026.backend.meal.MealDtos.MealLogItemRequest;
 import com.database2026.backend.meal.MealDtos.MealLogItemResponse;
 import com.database2026.backend.meal.MealDtos.MealLogListResponse;
 import com.database2026.backend.meal.MealDtos.MealLogResponse;
@@ -34,27 +35,16 @@ public class MealService {
 
     @Transactional
     public MealLogResponse create(long userId, MealLogCreateRequest request) {
-        long mealTypeId = mealTypeId(request.mealType());
-        long mealLogId;
-        try {
-            mealLogId = sqlSupport.insert("""
-                    insert into diet_entry (user_id, meal_type_id, consumed_date, memo)
-                    values (?, ?, ?, ?)
-                    """, userId, mealTypeId, request.logDate(), request.memo());
-        } catch (DuplicateKeyException exception) {
-            throw DomainException.conflict("MEAL_LOG_ALREADY_EXISTS", "이미 해당 날짜/끼니 식단 기록이 있습니다.");
-        }
-
-        for (MealLogItemRequest item : request.items()) {
-            insertItem(mealLogId, item);
-        }
+        long mealLogId = createMealLog(userId, request.logDate(), request.mealType(), request.memo());
         return mealLog(userId, mealLogId);
     }
 
     @Transactional
-    public MealLogResponse addItem(long userId, long mealLogId, MealLogItemRequest request) {
+    public MealLogResponse addFoodItems(long userId, long mealLogId, FoodMealLogItemsAddRequest request) {
         assertMealLogOwner(userId, mealLogId);
-        insertItem(mealLogId, request);
+        for (FoodMealLogItemRequest item : request.items()) {
+            insertFoodItem(userId, mealLogId, item.foodId(), item.amountG());
+        }
         return mealLog(userId, mealLogId);
     }
 
@@ -127,46 +117,22 @@ public class MealService {
         return new DailySummaryResponse(date, totals, warnings);
     }
 
-    private void insertItem(long mealLogId, MealLogItemRequest item) {
-        boolean hasFood = item.foodId() != null;
-        boolean hasMenuOption = item.menuOptionId() != null;
-        if (hasFood == hasMenuOption) {
-            throw DomainException.badRequest(
-                    "MEAL_LOG_ITEM_REFERENCE_INVALID",
-                    "foodId 또는 menuOptionId 중 정확히 하나만 입력해야 합니다."
-            );
+    private long createMealLog(long userId, LocalDate logDate, String mealType, String memo) {
+        long mealTypeId = mealTypeId(mealType);
+        try {
+            return sqlSupport.insert("""
+                    insert into diet_entry (user_id, meal_type_id, consumed_date, memo)
+                    values (?, ?, ?, ?)
+                    """, userId, mealTypeId, logDate, memo);
+        } catch (DuplicateKeyException exception) {
+            throw DomainException.conflict("MEAL_LOG_ALREADY_EXISTS", "이미 해당 날짜/끼니 식단 기록이 있습니다.");
         }
-        if (hasMenuOption) {
-            insertMenuOptionItems(mealLogId, item.menuOptionId());
-            return;
-        }
-        FoodPortion food = foodPortion(item.foodId());
-        BigDecimal amountG = Optional.ofNullable(item.amountG()).orElse(food.defaultServingG());
-        insertDietItem(mealLogId, food.foodId(), null, food.foodName(), amountG);
     }
 
-    private void insertMenuOptionItems(long mealLogId, long menuOptionId) {
-        List<MenuFoodItem> foods = jdbcTemplate.query("""
-                        select mi.food_id,
-                               mi.raw_item_name,
-                               mi.amount_g
-                        from cafeteria_menu_item mi
-                        where mi.option_id = ?
-                        order by mi.menu_item_id
-                        """,
-                (rs, rowNum) -> new MenuFoodItem(
-                        rs.getLong("food_id"),
-                        rs.getString("raw_item_name"),
-                        rs.getBigDecimal("amount_g")
-                ),
-                menuOptionId
-        );
-        if (foods.isEmpty()) {
-            throw DomainException.notFound("MENU_OPTION_NOT_FOUND", "추가할 수 있는 식당 메뉴 옵션을 찾을 수 없습니다.");
-        }
-        for (MenuFoodItem food : foods) {
-            insertDietItem(mealLogId, food.foodId(), menuOptionId, food.rawItemName(), food.amountG());
-        }
+    private void insertFoodItem(long userId, long mealLogId, long foodId, BigDecimal requestedAmountG) {
+        FoodPortion food = foodPortion(userId, foodId);
+        BigDecimal amountG = Optional.ofNullable(requestedAmountG).orElse(food.defaultServingG());
+        insertDietItem(mealLogId, food.foodId(), null, food.foodName(), amountG);
     }
 
     private void insertDietItem(long mealLogId, Long foodId, Long sourceOptionId, String itemName, BigDecimal amountG) {
@@ -179,19 +145,31 @@ public class MealService {
                 """, mealLogId, foodId, sourceOptionId, itemName, amountG);
     }
 
-    private FoodPortion foodPortion(Long foodId) {
+    private FoodPortion foodPortion(long userId, Long foodId) {
         return jdbcTemplate.query("""
                         select food_id, food_name, default_serving_g
                         from food
                         where food_id = ?
-                          and source_name = 'MFDS_INTEGRATED'
+                          and (
+                              source_name = 'MFDS_INTEGRATED'
+                              or (
+                                  source_name = 'USER_CUSTOM'
+                                  and exists (
+                                      select 1
+                                      from user_custom_food ucf
+                                      where ucf.food_id = food.food_id
+                                        and ucf.user_id = ?
+                                  )
+                              )
+                          )
                         """,
                 (rs, rowNum) -> new FoodPortion(
                         rs.getLong("food_id"),
                         rs.getString("food_name"),
                         rs.getBigDecimal("default_serving_g")
                 ),
-                foodId
+                foodId,
+                userId
         ).stream().findFirst().orElseThrow(() -> DomainException.notFound("FOOD_NOT_FOUND", "음식을 찾을 수 없습니다."));
     }
 
@@ -278,7 +256,11 @@ public class MealService {
                         """,
                 (rs, rowNum) -> new UserStandardProfile(rs.getString("gender"), rs.getBigDecimal("bmi")),
                 userId
-        ).stream().findFirst().orElseThrow(() -> DomainException.notFound("USER_PROFILE_NOT_FOUND", "사용자 프로필을 찾을 수 없습니다."));
+        ).stream().findFirst().orElse(null);
+
+        if (profile == null) {
+            return List.of();
+        }
 
         Optional<Long> standardGroupId = jdbcTemplate.query("""
                         select standard_group_id
@@ -388,9 +370,6 @@ public class MealService {
     }
 
     private record FoodPortion(Long foodId, String foodName, BigDecimal defaultServingG) {
-    }
-
-    private record MenuFoodItem(Long foodId, String rawItemName, BigDecimal amountG) {
     }
 
     private record UserStandardProfile(String gender, BigDecimal bmi) {

@@ -33,7 +33,7 @@ public class AuthController {
     }
 
     @PostMapping("/signup")
-    @Operation(summary = "회원가입", description = "학교 이메일 인증코드를 검증하고 계정을 생성합니다. 건강 프로필은 가입 후 별도로 입력합니다.")
+    @Operation(summary = "회원가입", description = "이메일 도메인으로 대학교를 자동 판별합니다. 등록된 학교 이메일이면 인증코드를 검증하고, 그 외 이메일은 일반 사용자로 가입합니다.")
     ResponseEntity<ApiResponse<AuthResponse>> signup(@Valid @RequestBody SignupRequest request) {
         return ResponseEntity
                 .status(HttpStatus.CREATED)
@@ -41,7 +41,7 @@ public class AuthController {
     }
 
     @PostMapping("/school-email-verifications")
-    @Operation(summary = "학교 이메일 인증코드 발급", description = "선택한 학교의 허용 이메일 도메인을 확인한 뒤 회원가입용 인증코드를 발급합니다.")
+    @Operation(summary = "학교 이메일 인증코드 발급", description = "입력한 이메일 도메인으로 대학교를 자동 판별한 뒤 회원가입용 인증코드를 발급합니다.")
     ApiResponse<SchoolEmailVerificationResponse> requestSchoolEmailVerification(
             @Valid @RequestBody SchoolEmailVerificationRequest request
     ) {

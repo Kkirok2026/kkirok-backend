@@ -16,7 +16,9 @@ public final class UserDtos {
     public record ProfileUpdateRequest(
             @NotBlank @Schema(allowableValues = {"MALE", "FEMALE", "OTHER"}) String gender,
             @NotNull @DecimalMin("1.0") BigDecimal heightCm,
-            @NotNull @Positive BigDecimal weightKg
+            @NotNull @Positive BigDecimal weightKg,
+            @Schema(description = "목표 몸무게(kg). 설정하지 않으면 null", example = "52.0")
+            @Positive BigDecimal targetWeightKg
     ) {
     }
 
@@ -24,6 +26,7 @@ public final class UserDtos {
             Long userId,
             String email,
             String name,
+            Integer age,
             UniversityResponse university,
             HealthProfileResponse profile,
             Boolean profileCompleted,
@@ -31,13 +34,14 @@ public final class UserDtos {
     ) {
     }
 
-    public record UniversityResponse(Long universityId, String universityCode, String universityName) {
+    public record UniversityResponse(Long universityId, String universityName) {
     }
 
     public record HealthProfileResponse(
             String gender,
             BigDecimal heightCm,
             BigDecimal weightKg,
+            BigDecimal targetWeightKg,
             BigDecimal bmi
     ) {
     }

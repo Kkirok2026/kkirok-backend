@@ -40,7 +40,7 @@ public class MenuController {
     }
 
     @GetMapping("/universities")
-    @Operation(summary = "대학교 목록 조회", description = "초기 데이터는 인하대학교를 제공하며, 다대학 확장을 고려한 API입니다.")
+    @Operation(summary = "대학교 목록 조회", description = "초기 데이터는 인하대학교를 제공하며, 이메일 도메인 자동 판별과 다대학 확장을 고려한 API입니다.")
     ApiResponse<UniversityListResponse> universities() {
         return ApiResponse.success(menuService.universities());
     }
@@ -52,7 +52,7 @@ public class MenuController {
     }
 
     @GetMapping("/menus/daily")
-    @Operation(summary = "날짜/끼니별 식당 메뉴 조회", description = "학생식당 점심은 한식/양식 옵션, 기숙사식당은 중식/석식 단일 옵션으로 반환합니다.")
+    @Operation(summary = "날짜/끼니별 식당 메뉴 조회", description = "생활관식당은 점심/저녁 메뉴, 학생식당 점심은 한상한담/ONE PLATE/Noodle/셀프라면 등 코너별 메뉴, 학생식당 저녁은 석식 메뉴로 반환합니다.")
     ApiResponse<DailyMenuResponse> dailyMenu(
             @RequestParam long universityId,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
@@ -62,17 +62,18 @@ public class MenuController {
     }
 
     @GetMapping("/menus/compare")
-    @Operation(summary = "식당 메뉴 탄단지 비교", description = "같은 날짜/끼니의 모든 식당 옵션별 열량, 탄수화물, 단백질, 지방을 비교합니다.")
+    @Operation(summary = "식당 메뉴 탄단지 비교", description = "학교 이메일로 인증된 사용자만 사용할 수 있습니다. 생활관식당 메뉴와 사용자가 선택한 학생식당 메뉴를 비교합니다.")
     @SecurityRequirement(name = "bearerAuth")
     ApiResponse<MenuCompareResponse> compare(
             @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization,
             @RequestParam long universityId,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
-            @RequestParam String mealType
+            @RequestParam String mealType,
+            @RequestParam(required = false) Long studentOptionId
     ) {
         long userId = authSessionService.requireUserId(authorization);
         menuService.assertUserCanCompare(userId, universityId);
-        return ApiResponse.success(menuService.compare(universityId, date, mealType));
+        return ApiResponse.success(menuService.compare(userId, universityId, date, mealType, studentOptionId));
     }
 
     @PostMapping("/menus/crawl/inha/student")

@@ -4,6 +4,7 @@ import io.swagger.v3.oas.models.Components;
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Info;
 import io.swagger.v3.oas.models.security.SecurityScheme;
+import org.springdoc.core.customizers.OperationCustomizer;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -23,5 +24,15 @@ public class OpenApiConfig {
                                 .type(SecurityScheme.Type.HTTP)
                                 .scheme("bearer")
                                 .bearerFormat("opaque-token")));
+    }
+
+    @Bean
+    OperationCustomizer hideAuthorizationHeaderParameter() {
+        return (operation, handlerMethod) -> {
+            if (operation.getParameters() != null) {
+                operation.getParameters().removeIf(parameter -> "Authorization".equalsIgnoreCase(parameter.getName()));
+            }
+            return operation;
+        };
     }
 }

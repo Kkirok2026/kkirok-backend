@@ -1,6 +1,8 @@
 package com.database2026.backend.auth;
 
 import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import java.math.BigDecimal;
@@ -16,7 +18,7 @@ public final class AuthDtos {
             String verificationCode,
             @NotBlank String password,
             @NotBlank String name,
-            Long universityId
+            @NotNull @Min(1) @Max(120) Integer age
     ) {
     }
 
@@ -36,13 +38,11 @@ public final class AuthDtos {
     }
 
     public record SchoolEmailVerificationRequest(
-            @NotNull Long universityId,
             @Email @NotBlank String email
     ) {
     }
 
     public record SchoolEmailVerificationResponse(
-            Long verificationId,
             Long universityId,
             String email,
             LocalDateTime expiresAt

@@ -46,6 +46,13 @@ public class AuthSessionService {
         ));
     }
 
+    public Optional<Long> optionalUserId(String authorizationHeader) {
+        if (authorizationHeader == null || authorizationHeader.isBlank()) {
+            return Optional.empty();
+        }
+        return Optional.of(requireUserId(authorizationHeader));
+    }
+
     public void revoke(String authorizationHeader) {
         String token = extractToken(authorizationHeader);
         jdbcTemplate.update("""

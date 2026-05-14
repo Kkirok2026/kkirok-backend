@@ -44,7 +44,7 @@ public class UserController {
     }
 
     @PutMapping("/me/profile")
-    @Operation(summary = "내 건강 프로필 수정", description = "키/몸무게/성별 변경 시 BMI를 다시 계산합니다.")
+    @Operation(summary = "내 건강 프로필 수정", description = "키/현재 몸무게/목표 몸무게/성별을 저장하고 BMI를 다시 계산합니다.")
     ApiResponse<HealthProfileResponse> updateProfile(
             @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization,
             @Valid @RequestBody ProfileUpdateRequest request

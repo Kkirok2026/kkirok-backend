@@ -7,6 +7,7 @@ import com.database2026.backend.menu.MenuDtos.DiningPlaceItem;
 import com.database2026.backend.menu.MenuDtos.DiningPlaceListResponse;
 import com.database2026.backend.menu.MenuDtos.DiningPlaceMenu;
 import com.database2026.backend.menu.MenuDtos.MenuCompareResponse;
+import com.database2026.backend.menu.MenuDtos.MenuAllergyWarning;
 import com.database2026.backend.menu.MenuDtos.MenuOptionCompareItem;
 import com.database2026.backend.menu.MenuDtos.MenuOptionSummary;
 import com.database2026.backend.menu.MenuDtos.UniversityItem;
@@ -14,9 +15,11 @@ import com.database2026.backend.menu.MenuDtos.UniversityListResponse;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
@@ -31,16 +34,13 @@ public class MenuService {
 
     public UniversityListResponse universities() {
         List<UniversityItem> items = new ArrayList<>();
-        items.add(new UniversityItem(null, "NONE", "선택 안함"));
         items.addAll(jdbcTemplate.query("""
-                        select university_id, university_code, university_name
+                        select university_id, university_name
                         from universities
-                        where is_active = true
                         order by university_name
                         """,
                 (rs, rowNum) -> new UniversityItem(
                         rs.getLong("university_id"),
-                        rs.getString("university_code"),
                         rs.getString("university_name")
                 )
         ));
@@ -80,7 +80,6 @@ public class MenuService {
                     row.categoryCode(),
                     row.categoryName(),
                     row.optionName(),
-                    row.price(),
                     row.nutrients()
             ));
         }
@@ -96,20 +95,28 @@ public class MenuService {
         return new DailyMenuResponse(universityId, date, mealTypeCode, diningPlaces);
     }
 
-    public MenuCompareResponse compare(long universityId, LocalDate date, String mealType) {
+    public MenuCompareResponse compare(long userId, long universityId, LocalDate date, String mealType, Long studentOptionId) {
         String mealTypeCode = normalizeMealType(mealType);
+        if (studentOptionId != null) {
+            assertStudentOptionCanCompare(universityId, date, mealTypeCode, studentOptionId);
+        }
         List<MenuOptionCompareItem> items = menuOptionRows(universityId, date, mealTypeCode)
                 .stream()
+                .filter(row -> studentOptionId == null
+                        || "DORMITORY".equals(row.diningPlaceType())
+                        || row.optionId().equals(studentOptionId))
                 .map(row -> new MenuOptionCompareItem(
                         row.optionId(),
                         row.diningPlaceName(),
                         row.diningPlaceType(),
+                        row.categoryCode(),
                         row.categoryName(),
                         row.optionName(),
-                        row.nutrients()
+                        row.nutrients(),
+                        allergyWarnings(userId, row.optionId())
                 ))
                 .toList();
-        return new MenuCompareResponse(universityId, date, mealTypeCode, items);
+        return new MenuCompareResponse(universityId, date, mealTypeCode, studentOptionId, items);
     }
 
     public void assertUserCanCompare(long userId, long universityId) {
@@ -123,9 +130,9 @@ public class MenuService {
                 userId
         ).stream().findFirst().orElseThrow(() -> DomainException.notFound("USER_NOT_FOUND", "사용자를 찾을 수 없습니다."));
         if (selectedUniversityId == null) {
-            throw DomainException.badRequest("UNIVERSITY_SELECTION_REQUIRED", "식당 메뉴 비교를 이용하려면 대학교를 선택해야 합니다.");
+            throw DomainException.badRequest("SCHOOL_EMAIL_USER_REQUIRED", "식당 메뉴 비교는 학교 이메일로 인증된 사용자만 이용할 수 있습니다.");
         }
-        if (selectedUniversityId != universityId) {
+        if (selectedUniversityId.longValue() != universityId) {
             throw DomainException.badRequest("UNIVERSITY_SELECTION_MISMATCH", "선택한 대학교의 식당 메뉴만 비교할 수 있습니다.");
         }
     }
@@ -139,7 +146,6 @@ public class MenuService {
                                c.category_code,
                                c.category_name,
                                o.option_name,
-                               o.price,
                                coalesce(sum(case when n.nutrient_code = 'CALORIES_KCAL' then v.amount_per_100g * mi.amount_g / 100 end), 0) as calories_kcal,
                                coalesce(sum(case when n.nutrient_code = 'CARB_G' then v.amount_per_100g * mi.amount_g / 100 end), 0) as carb_g,
                                coalesce(sum(case when n.nutrient_code = 'PROTEIN_G' then v.amount_per_100g * mi.amount_g / 100 end), 0) as protein_g,
@@ -166,9 +172,11 @@ public class MenuService {
                                  c.category_code,
                                  c.category_name,
                                  o.option_name,
-                                 o.price,
                                  c.sort_order
-                        order by dp.dining_place_type desc, dp.dining_place_name, c.sort_order, o.option_name
+                        order by case when dp.dining_place_type = 'DORMITORY' then 0 else 1 end,
+                                 dp.dining_place_name,
+                                 c.sort_order,
+                                 o.option_name
                         """,
                 (rs, rowNum) -> new MenuOptionRow(
                         rs.getLong("dining_place_id"),
@@ -178,13 +186,41 @@ public class MenuService {
                         rs.getString("category_code"),
                         rs.getString("category_name"),
                         rs.getString("option_name"),
-                        (Integer) rs.getObject("price"),
                         NutrientTotals.from(rs)
                 ),
                 universityId,
                 date,
                 mealTypeCode
         );
+    }
+
+    private void assertStudentOptionCanCompare(long universityId, LocalDate date, String mealTypeCode, long studentOptionId) {
+        Integer count = jdbcTemplate.queryForObject("""
+                        select count(*)
+                        from cafeteria_menu_option o
+                        join cafeteria_menu m on m.menu_id = o.menu_id
+                        join dining_place dp on dp.dining_place_id = m.dining_place_id
+                        join meal_type mt on mt.meal_type_id = m.meal_type_id
+                        where o.option_id = ?
+                          and dp.university_id = ?
+                          and dp.dining_place_type = 'STUDENT'
+                          and dp.is_active = true
+                          and o.is_available = true
+                          and m.served_date = ?
+                          and mt.meal_type_code = ?
+                        """,
+                Integer.class,
+                studentOptionId,
+                universityId,
+                date,
+                mealTypeCode
+        );
+        if (count == null || count == 0) {
+            throw DomainException.badRequest(
+                    "STUDENT_MENU_OPTION_INVALID",
+                    "studentOptionId는 해당 날짜/끼니의 학생식당 메뉴 옵션이어야 합니다."
+            );
+        }
     }
 
     private String normalizeMealType(String mealType) {
@@ -195,6 +231,157 @@ public class MenuService {
         return normalized;
     }
 
+    private List<MenuAllergyWarning> allergyWarnings(long userId, long optionId) {
+        List<MenuItemForWarning> menuItems = jdbcTemplate.query("""
+                        select mi.food_id, mi.raw_item_name
+                        from cafeteria_menu_item mi
+                        where mi.option_id = ?
+                        order by mi.menu_item_id
+                        """,
+                (rs, rowNum) -> new MenuItemForWarning(
+                        rs.getObject("food_id", Long.class),
+                        rs.getString("raw_item_name")
+                ),
+                optionId
+        );
+        if (menuItems.isEmpty()) {
+            return List.of();
+        }
+
+        Map<String, MenuAllergyWarning> warnings = new LinkedHashMap<>();
+        List<UserFoodAllergy> foodAllergies = userFoodAllergies(userId);
+        List<UserIngredientKeyword> ingredientKeywords = userIngredientKeywords(userId);
+
+        for (MenuItemForWarning item : menuItems) {
+            for (UserFoodAllergy allergy : foodAllergies) {
+                if (item.foodId() != null && item.foodId().equals(allergy.foodId())) {
+                    addWarning(warnings, new MenuAllergyWarning(
+                            "FOOD_MATCH",
+                            allergy.foodName(),
+                            item.rawItemName(),
+                            "FOOD",
+                            allergy.foodName() + " 알레르기 음식과 매칭되는 메뉴 항목입니다."
+                    ));
+                }
+            }
+
+            String normalizedRawName = normalizeForMatch(item.rawItemName());
+            for (UserIngredientKeyword keyword : ingredientKeywords) {
+                if (!keyword.normalizedKeyword().isBlank() && normalizedRawName.contains(keyword.normalizedKeyword())) {
+                    addWarning(warnings, new MenuAllergyWarning(
+                            "POSSIBLE_INGREDIENT_NAME_MATCH",
+                            keyword.allergyName(),
+                            item.rawItemName(),
+                            keyword.source(),
+                            keyword.allergyName() + " 원재료가 포함되어 있을 가능성이 있습니다."
+                    ));
+                }
+            }
+
+            if (item.foodId() != null) {
+                for (FoodIngredientMatch match : foodIngredientMatches(userId, item.foodId())) {
+                    addWarning(warnings, new MenuAllergyWarning(
+                            "FOOD_INGREDIENT_MATCH",
+                            match.allergyName(),
+                            match.ingredientName(),
+                            "FOOD_INGREDIENT",
+                            match.allergyName() + " 원재료가 음식 원재료 목록과 매칭됩니다."
+                    ));
+                }
+            }
+        }
+        return List.copyOf(warnings.values());
+    }
+
+    private List<UserFoodAllergy> userFoodAllergies(long userId) {
+        return jdbcTemplate.query("""
+                        select a.food_id, f.food_name
+                        from user_food_allergy a
+                        join food f on f.food_id = a.food_id
+                        where a.user_id = ?
+                        """,
+                (rs, rowNum) -> new UserFoodAllergy(rs.getLong("food_id"), rs.getString("food_name")),
+                userId
+        );
+    }
+
+    private List<UserIngredientKeyword> userIngredientKeywords(long userId) {
+        Set<UserIngredientKeyword> keywords = new LinkedHashSet<>();
+        keywords.addAll(jdbcTemplate.query("""
+                        select allergy_name, normalized_allergy_name as keyword, 'USER_INPUT' as source
+                        from user_ingredient_allergy
+                        where user_id = ?
+                        """,
+                (rs, rowNum) -> new UserIngredientKeyword(
+                        rs.getString("allergy_name"),
+                        rs.getString("keyword"),
+                        rs.getString("source")
+                ),
+                userId
+        ));
+        keywords.addAll(jdbcTemplate.query("""
+                        select uia.allergy_name, i.normalized_name as keyword, 'INGREDIENT' as source
+                        from user_ingredient_allergy uia
+                        join ingredient i on i.ingredient_id = uia.ingredient_id
+                        where uia.user_id = ?
+                        """,
+                (rs, rowNum) -> new UserIngredientKeyword(
+                        rs.getString("allergy_name"),
+                        rs.getString("keyword"),
+                        rs.getString("source")
+                ),
+                userId
+        ));
+        keywords.addAll(jdbcTemplate.query("""
+                        select uia.allergy_name, ia.normalized_alias as keyword, 'INGREDIENT_ALIAS' as source
+                        from user_ingredient_allergy uia
+                        join ingredient_alias ia on ia.ingredient_id = uia.ingredient_id
+                        where uia.user_id = ?
+                        """,
+                (rs, rowNum) -> new UserIngredientKeyword(
+                        rs.getString("allergy_name"),
+                        rs.getString("keyword"),
+                        rs.getString("source")
+                ),
+                userId
+        ));
+        return List.copyOf(keywords);
+    }
+
+    private List<FoodIngredientMatch> foodIngredientMatches(long userId, long foodId) {
+        return jdbcTemplate.query("""
+                        select distinct uia.allergy_name, i.ingredient_name
+                        from user_ingredient_allergy uia
+                        join food_ingredient fi on fi.ingredient_id = uia.ingredient_id
+                        join ingredient i on i.ingredient_id = fi.ingredient_id
+                        where uia.user_id = ?
+                          and fi.food_id = ?
+                        """,
+                (rs, rowNum) -> new FoodIngredientMatch(
+                        rs.getString("allergy_name"),
+                        rs.getString("ingredient_name")
+                ),
+                userId,
+                foodId
+        );
+    }
+
+    private void addWarning(Map<String, MenuAllergyWarning> warnings, MenuAllergyWarning warning) {
+        warnings.putIfAbsent(
+                warning.warningType() + "|" + warning.allergyName() + "|" + warning.matchedText(),
+                warning
+        );
+    }
+
+    private String normalizeForMatch(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.trim()
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("[\\s_\\-()\\[\\]{}]", "");
+    }
+
     private record MenuOptionRow(
             Long diningPlaceId,
             String diningPlaceName,
@@ -203,7 +390,6 @@ public class MenuService {
             String categoryCode,
             String categoryName,
             String optionName,
-            Integer price,
             NutrientTotals nutrients
     ) {
     }
@@ -217,5 +403,17 @@ public class MenuService {
         DiningPlaceAccumulator(Long diningPlaceId, String diningPlaceName, String diningPlaceType) {
             this(diningPlaceId, diningPlaceName, diningPlaceType, new ArrayList<>());
         }
+    }
+
+    private record MenuItemForWarning(Long foodId, String rawItemName) {
+    }
+
+    private record UserFoodAllergy(Long foodId, String foodName) {
+    }
+
+    private record UserIngredientKeyword(String allergyName, String normalizedKeyword, String source) {
+    }
+
+    private record FoodIngredientMatch(String allergyName, String ingredientName) {
     }
 }

@@ -45,7 +45,11 @@ public class AuthService {
     @Transactional
     public SchoolEmailVerificationResponse requestSchoolEmailVerification(SchoolEmailVerificationRequest request) {
         String email = normalizeEmail(request.email());
-        validateUniversityEmail(request.universityId(), email);
+        UniversityByDomain university = universityByEmailDomain(email)
+                .orElseThrow(() -> DomainException.badRequest(
+                        "SCHOOL_EMAIL_DOMAIN_NOT_SUPPORTED",
+                        "등록된 대학교 이메일 도메인이 아닙니다. 일반 사용자는 이메일 인증 없이 회원가입할 수 있습니다."
+                ));
         assertEmailAvailable(email);
 
         LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(10);
@@ -58,51 +62,53 @@ public class AuthService {
                   and student_email = ?
                   and purpose = 'SIGNUP'
                   and consumed_at is null
-                """, request.universityId(), email);
+                """, university.universityId(), email);
 
-        long verificationId = sqlSupport.insert("""
+        sqlSupport.insert("""
                 insert into school_email_verification_code
                     (university_id, student_email, purpose, code_hash, expires_at)
                 values (?, ?, 'SIGNUP', ?, ?)
-                """, request.universityId(), email, passwordEncoder.encode(code), expiresAt);
+                """, university.universityId(), email, passwordEncoder.encode(code), expiresAt);
 
         schoolEmailVerificationSender.send(email, code, expiresAt);
-        return new SchoolEmailVerificationResponse(verificationId, request.universityId(), email, expiresAt);
+        return new SchoolEmailVerificationResponse(university.universityId(), email, expiresAt);
     }
 
     @Transactional
     public AuthResponse signup(SignupRequest request) {
         String email = normalizeEmail(request.email());
         assertEmailAvailable(email);
-        if (request.universityId() != null) {
-            validateUniversityEmail(request.universityId(), email);
-            consumeSignupVerificationCode(request.universityId(), email, request.verificationCode());
+        Optional<UniversityByDomain> university = universityByEmailDomain(email);
+        Long universityId = university.map(UniversityByDomain::universityId).orElse(null);
+        if (universityId != null) {
+            consumeSignupVerificationCode(universityId, email, request.verificationCode());
         }
 
         long userId;
         try {
             userId = sqlSupport.insert("""
-                    insert into user_account (primary_university_id, email, password_hash, name)
-                    values (?, ?, ?, ?)
+                    insert into user_account (primary_university_id, email, password_hash, name, age)
+                    values (?, ?, ?, ?, ?)
                     """,
-                    request.universityId(),
+                    universityId,
                     email,
                     passwordEncoder.encode(request.password()),
-                    request.name()
+                    request.name(),
+                    request.age()
             );
         } catch (DuplicateKeyException exception) {
             throw DomainException.conflict("EMAIL_ALREADY_EXISTS", "이미 가입된 이메일입니다.");
         }
 
-        if (request.universityId() != null) {
+        if (universityId != null) {
             sqlSupport.update("""
                     insert into student_verifications (user_id, university_id, student_email, status, verified_at)
                     values (?, ?, ?, ?, ?)
-                    """, userId, request.universityId(), email, "VERIFIED", LocalDateTime.now());
+                    """, userId, universityId, email, "VERIFIED", LocalDateTime.now());
         }
 
         String token = authSessionService.createSession(userId);
-        return new AuthResponse(userId, request.universityId(), token, null, false);
+        return new AuthResponse(userId, universityId, token, null, false);
     }
 
     @Transactional
@@ -153,7 +159,7 @@ public class AuthService {
 
     private void consumeSignupVerificationCode(Long universityId, String email, String code) {
         if (code == null || code.isBlank()) {
-            throw DomainException.badRequest("SCHOOL_EMAIL_VERIFICATION_CODE_REQUIRED", "학교를 선택한 경우 학교 이메일 인증코드가 필요합니다.");
+            throw DomainException.badRequest("SCHOOL_EMAIL_VERIFICATION_CODE_REQUIRED", "학교 이메일로 가입하는 경우 학교 이메일 인증코드가 필요합니다.");
         }
         VerificationCodeRow verification = jdbcTemplate.query("""
                         select verification_id, code_hash
@@ -202,25 +208,17 @@ public class AuthService {
         }
     }
 
-    private void validateUniversityEmail(Long universityId, String email) {
+    private Optional<UniversityByDomain> universityByEmailDomain(String email) {
         String domain = extractEmailDomain(email);
-        boolean valid = jdbcTemplate.queryForObject("""
-                        select count(*)
+        return jdbcTemplate.query("""
+                        select university_id
                         from university_email_domains
-                        where university_id = ?
-                          and lower(email_domain) = ?
-                          and is_active = true
+                        where lower(email_domain) = ?
+                        limit 1
                         """,
-                Integer.class,
-                universityId,
+                (rs, rowNum) -> new UniversityByDomain(rs.getLong("university_id")),
                 domain
-        ) > 0;
-        if (!valid) {
-            throw DomainException.badRequest(
-                    "UNIVERSITY_EMAIL_DOMAIN_INVALID",
-                    "해당 학교에서 허용한 이메일 도메인이 아닙니다."
-            );
-        }
+        ).stream().findFirst();
     }
 
     private String extractEmailDomain(String email) {
@@ -247,5 +245,8 @@ public class AuthService {
     }
 
     private record VerificationCodeRow(Long verificationId, String codeHash) {
+    }
+
+    private record UniversityByDomain(Long universityId) {
     }
 }
