@@ -11,7 +11,6 @@ import com.database2026.backend.ingredient.IngredientDtos.UserIngredientAllergyB
 import com.database2026.backend.ingredient.IngredientDtos.UserIngredientAllergyItem;
 import com.database2026.backend.ingredient.IngredientDtos.UserIngredientAllergyListResponse;
 import com.database2026.backend.support.SqlSupport;
-import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -55,8 +54,9 @@ public class IngredientService {
     public UserIngredientAllergyListResponse userIngredientAllergies(long userId) {
         return new UserIngredientAllergyListResponse(jdbcTemplate.query("""
                         select allergy_id, ingredient_id, allergy_name, reaction_note
-                        from user_ingredient_allergy
+                        from user_allergy
                         where user_id = ?
+                          and allergy_type = 'INGREDIENT'
                         order by allergy_name
                         """,
                 (rs, rowNum) -> new UserIngredientAllergyItem(
@@ -88,16 +88,19 @@ public class IngredientService {
         String note = normalizeNote(request.reactionNote());
         try {
             jdbcTemplate.update("""
-                    insert into user_ingredient_allergy (user_id, ingredient_id, allergy_name, normalized_allergy_name, reaction_note)
-                    values (?, ?, ?, ?, ?)
+                    insert into user_allergy (
+                        user_id, allergy_type, food_id, ingredient_id, allergy_name, normalized_allergy_name, reaction_note
+                    )
+                    values (?, 'INGREDIENT', null, ?, ?, ?, ?)
                     """, userId, ingredient.ingredientId(), ingredient.name(), normalize(ingredient.name()), note);
         } catch (DuplicateKeyException exception) {
             jdbcTemplate.update("""
-                    update user_ingredient_allergy
+                    update user_allergy
                     set ingredient_id = ?,
                         allergy_name = ?,
                         reaction_note = ?
                     where user_id = ?
+                      and allergy_type = 'INGREDIENT'
                       and normalized_allergy_name = ?
                     """, ingredient.ingredientId(), ingredient.name(), note, userId, normalize(ingredient.name()));
         }
@@ -106,8 +109,9 @@ public class IngredientService {
     @Transactional
     public UserIngredientAllergyListResponse deleteUserIngredientAllergy(long userId, long allergyId) {
         jdbcTemplate.update("""
-                delete from user_ingredient_allergy
+                delete from user_allergy
                 where user_id = ?
+                  and allergy_type = 'INGREDIENT'
                   and allergy_id = ?
                 """, userId, allergyId);
         return userIngredientAllergies(userId);
@@ -199,14 +203,12 @@ public class IngredientService {
         for (String alias : splitAliases(row.nicknames())) {
             insertAlias(ingredientId, alias, "NICKNAME");
         }
-        refreshIngredientAllergens(ingredientId);
         return ingredientId;
     }
 
     private long upsertIngredientName(String ingredientName, String sourceName) {
         long ingredientId = upsertIngredient(sourceName, null, ingredientName, null, null, null, null, null, null, null);
         insertAlias(ingredientId, ingredientName, "SEARCH");
-        refreshIngredientAllergens(ingredientId);
         return ingredientId;
     }
 
@@ -236,8 +238,7 @@ public class IngredientService {
                         scientific_name = coalesce(?, scientific_name),
                         region_name = coalesce(?, region_name),
                         status_name = coalesce(?, status_name),
-                        use_condition = coalesce(?, use_condition),
-                        updated_at = current_timestamp
+                        use_condition = coalesce(?, use_condition)
                     where ingredient_id = ?
                     """, sourceName, sourceCode, ingredientName, largeCategory, middleCategory, englishName,
                     scientificName, regionName, statusName, useCondition, existingId.get());
@@ -276,55 +277,6 @@ public class IngredientService {
         } catch (DuplicateKeyException ignored) {
             // Existing aliases are stable search data.
         }
-    }
-
-    private void refreshIngredientAllergens(long ingredientId) {
-        List<String> names = ingredientNamesForMatching(ingredientId);
-        List<AllergenKeyword> keywords = jdbcTemplate.query("""
-                        select allergen_id, normalized_keyword
-                        from allergen_keyword
-                        """,
-                (rs, rowNum) -> new AllergenKeyword(rs.getLong("allergen_id"), rs.getString("normalized_keyword"))
-        );
-        for (String name : names) {
-            for (AllergenKeyword keyword : keywords) {
-                if (containsIngredientKeyword(name, keyword.normalizedKeyword())) {
-                    try {
-                        jdbcTemplate.update("""
-                                insert into ingredient_allergen (ingredient_id, allergen_id, match_basis)
-                                values (?, ?, 'KEYWORD')
-                                """, ingredientId, keyword.allergenId());
-                    } catch (DuplicateKeyException ignored) {
-                        // Already mapped.
-                    }
-                }
-            }
-        }
-    }
-
-    private List<String> ingredientNamesForMatching(long ingredientId) {
-        List<String> names = new ArrayList<>();
-        names.addAll(jdbcTemplate.query("""
-                        select normalized_name
-                        from ingredient
-                        where ingredient_id = ?
-                        """,
-                (rs, rowNum) -> rs.getString("normalized_name"),
-                ingredientId
-        ));
-        names.addAll(jdbcTemplate.query("""
-                        select normalized_alias
-                        from ingredient_alias
-                        where ingredient_id = ?
-                        """,
-                (rs, rowNum) -> rs.getString("normalized_alias"),
-                ingredientId
-        ));
-        return names;
-    }
-
-    private boolean containsIngredientKeyword(String name, String keyword) {
-        return name != null && keyword != null && !keyword.isBlank() && name.contains(keyword);
     }
 
     private AllergyIngredient allergyIngredient(UserIngredientAllergyAddRequest request) {
@@ -455,8 +407,5 @@ public class IngredientService {
     }
 
     private record FoodLookup(Long foodId, String foodName) {
-    }
-
-    private record AllergenKeyword(Long allergenId, String normalizedKeyword) {
     }
 }

@@ -36,6 +36,8 @@ public class MealService {
 
     private static final String DEFAULT_ACTIVITY_LEVEL = "LOW_ACTIVE";
     private static final BigDecimal SODIUM_MAX_MG = BigDecimal.valueOf(2300);
+    private static final String ALLERGY_WARNING_MESSAGE =
+            "%s 알레르기 항목이 포함되어 있을 수 있습니다. 섭취 전 원재료를 확인하세요.";
     private static final String TARGET_BASIS =
             "IOM DRI 성인 EER 공식 + 2025 한국인 영양소 섭취기준 에너지 적정비율"
                     + "(탄수화물 50-65%, 단백질 10-20%, 지방 15-30%, 총당류 20% 이내)";
@@ -75,17 +77,17 @@ public class MealService {
     }
 
     @Transactional
-    public MealLogResponse setExcluded(long userId, long mealLogId, long dietItemId, boolean excluded) {
+    public MealLogResponse setExcluded(long userId, long mealLogId, long mealLogItemId, boolean excluded) {
         int updated = jdbcTemplate.update("""
-                update diet_entry_item
+                update meal_log_item
                 set is_excluded = ?
-                where diet_item_id = ?
-                  and diet_entry_id in (
-                      select diet_entry_id
-                      from diet_entry
-                      where diet_entry_id = ? and user_id = ?
+                where meal_log_item_id = ?
+                  and meal_log_id in (
+                      select meal_log_id
+                      from meal_log
+                      where meal_log_id = ? and user_id = ?
                   )
-                """, excluded, dietItemId, mealLogId, userId);
+                """, excluded, mealLogItemId, mealLogId, userId);
         if (updated == 0) {
             throw DomainException.notFound("MEAL_LOG_ITEM_NOT_FOUND", "식단 항목을 찾을 수 없습니다.");
         }
@@ -94,18 +96,17 @@ public class MealService {
 
     public MealLogResponse mealLog(long userId, long mealLogId) {
         MealLogHeader header = jdbcTemplate.query("""
-                        select d.diet_entry_id,
-                               d.consumed_date,
-                               mt.meal_type_code,
+                        select d.meal_log_id,
+                               d.log_date,
+                               d.meal_type,
                                d.memo
-                        from diet_entry d
-                        join meal_type mt on mt.meal_type_id = d.meal_type_id
-                        where d.user_id = ? and d.diet_entry_id = ?
+                        from meal_log d
+                        where d.user_id = ? and d.meal_log_id = ?
                         """,
                 (rs, rowNum) -> new MealLogHeader(
-                        rs.getLong("diet_entry_id"),
-                        rs.getObject("consumed_date", LocalDate.class),
-                        rs.getString("meal_type_code"),
+                        rs.getLong("meal_log_id"),
+                        rs.getObject("log_date", LocalDate.class),
+                        rs.getString("meal_type"),
                         rs.getString("memo")
                 ),
                 userId,
@@ -124,13 +125,17 @@ public class MealService {
 
     public MealLogListResponse listByDate(long userId, LocalDate date) {
         List<Long> ids = jdbcTemplate.query("""
-                        select d.diet_entry_id
-                        from diet_entry d
-                        join meal_type mt on mt.meal_type_id = d.meal_type_id
-                        where d.user_id = ? and d.consumed_date = ?
-                        order by mt.meal_type_id
+                        select d.meal_log_id
+                        from meal_log d
+                        where d.user_id = ? and d.log_date = ?
+                        order by case d.meal_type
+                                     when 'BREAKFAST' then 1
+                                     when 'LUNCH' then 2
+                                     when 'DINNER' then 3
+                                     else 4
+                                 end
                         """,
-                (rs, rowNum) -> rs.getLong("diet_entry_id"),
+                (rs, rowNum) -> rs.getLong("meal_log_id"),
                 userId,
                 date
         );
@@ -146,12 +151,12 @@ public class MealService {
     }
 
     private long createMealLog(long userId, LocalDate logDate, String mealType, String memo) {
-        long mealTypeId = mealTypeId(mealType);
+        String normalizedMealType = normalizeMealType(mealType);
         try {
             return sqlSupport.insert("""
-                    insert into diet_entry (user_id, meal_type_id, consumed_date, memo)
+                    insert into meal_log (user_id, meal_type, log_date, memo)
                     values (?, ?, ?, ?)
-                    """, userId, mealTypeId, logDate, memo);
+                    """, userId, normalizedMealType, logDate, memo);
         } catch (DuplicateKeyException exception) {
             throw DomainException.conflict("MEAL_LOG_ALREADY_EXISTS", "이미 해당 날짜/끼니 식단 기록이 있습니다.");
         }
@@ -160,28 +165,28 @@ public class MealService {
     private void insertFoodItem(long userId, long mealLogId, long foodId, BigDecimal requestedAmountG) {
         FoodPortion food = foodPortion(userId, foodId);
         BigDecimal amountG = Optional.ofNullable(requestedAmountG).orElse(food.defaultServingG());
-        insertDietItem(mealLogId, food.foodId(), null, food.foodName(), amountG);
+        insertMealLogItem(mealLogId, food.foodId(), null, food.foodName(), amountG);
     }
 
     private void insertMenuOptionItems(long mealLogId, MenuOptionContext option) {
         List<CafeteriaMenuItem> menuItems = cafeteriaMenuItems(option.optionId());
         if (menuItems.isEmpty()) {
-            insertDietItem(mealLogId, null, option.optionId(), option.optionName(), BigDecimal.valueOf(100));
+            insertMealLogItem(mealLogId, null, option.optionId(), option.optionName(), BigDecimal.valueOf(100));
             return;
         }
         for (CafeteriaMenuItem item : menuItems) {
-            insertDietItem(mealLogId, item.foodId(), option.optionId(), item.rawItemName(), item.amountG());
+            insertMealLogItem(mealLogId, item.foodId(), option.optionId(), item.rawItemName(), item.amountG());
         }
     }
 
-    private void insertDietItem(long mealLogId, Long foodId, Long sourceOptionId, String itemName, BigDecimal amountG) {
+    private void insertMealLogItem(long mealLogId, Long foodId, Long sourceMenuOptionId, String itemName, BigDecimal amountG) {
         if (amountG == null || amountG.compareTo(BigDecimal.ZERO) <= 0) {
             throw DomainException.badRequest("AMOUNT_INVALID", "amountG는 0보다 커야 합니다.");
         }
         sqlSupport.update("""
-                insert into diet_entry_item (diet_entry_id, food_id, source_option_id, item_name_snapshot, amount_g)
+                insert into meal_log_item (meal_log_id, food_id, source_menu_option_id, item_name_snapshot, amount_g)
                 values (?, ?, ?, ?, ?)
-                """, mealLogId, foodId, sourceOptionId, itemName, amountG);
+                """, mealLogId, foodId, sourceMenuOptionId, itemName, amountG);
     }
 
     private FoodPortion foodPortion(long userId, Long foodId) {
@@ -218,11 +223,10 @@ public class MealService {
                                o.option_name,
                                dp.university_id,
                                m.served_date,
-                               mt.meal_type_code
+                               m.meal_type
                         from cafeteria_menu_option o
                         join cafeteria_menu m on m.menu_id = o.menu_id
                         join dining_place dp on dp.dining_place_id = m.dining_place_id
-                        join meal_type mt on mt.meal_type_id = m.meal_type_id
                         where o.option_id = ?
                           and o.is_available = true
                           and dp.is_active = true
@@ -232,7 +236,7 @@ public class MealService {
                         rs.getString("option_name"),
                         rs.getLong("university_id"),
                         rs.getObject("served_date", LocalDate.class),
-                        rs.getString("meal_type_code")
+                        rs.getString("meal_type")
                 ),
                 optionId
         ).stream().findFirst().orElseThrow(() -> DomainException.notFound("MENU_OPTION_NOT_FOUND", "식당 메뉴를 찾을 수 없습니다."));
@@ -255,15 +259,16 @@ public class MealService {
     }
 
     private void assertUserCanUseMenuOption(long userId, long universityId) {
-        Long selectedUniversityId = jdbcTemplate.query("""
-                        select primary_university_id
+        UserUniversity userUniversity = jdbcTemplate.query("""
+                        select university_id
                         from user_account
                         where user_id = ?
                           and status = 'ACTIVE'
                         """,
-                (rs, rowNum) -> (Long) rs.getObject("primary_university_id"),
+                (rs, rowNum) -> new UserUniversity(rs.getObject("university_id", Long.class)),
                 userId
         ).stream().findFirst().orElseThrow(() -> DomainException.notFound("USER_NOT_FOUND", "사용자를 찾을 수 없습니다."));
+        Long selectedUniversityId = userUniversity.universityId();
         if (selectedUniversityId == null) {
             throw DomainException.badRequest("SCHOOL_EMAIL_USER_REQUIRED", "식당 메뉴 추가는 학교 이메일로 인증된 사용자만 이용할 수 있습니다.");
         }
@@ -274,14 +279,13 @@ public class MealService {
 
     private Optional<Long> findMealLogId(long userId, LocalDate logDate, String mealType) {
         return jdbcTemplate.query("""
-                        select d.diet_entry_id
-                        from diet_entry d
-                        join meal_type mt on mt.meal_type_id = d.meal_type_id
+                        select d.meal_log_id
+                        from meal_log d
                         where d.user_id = ?
-                          and d.consumed_date = ?
-                          and mt.meal_type_code = ?
+                          and d.log_date = ?
+                          and d.meal_type = ?
                         """,
-                (rs, rowNum) -> rs.getLong("diet_entry_id"),
+                (rs, rowNum) -> rs.getLong("meal_log_id"),
                 userId,
                 logDate,
                 mealType
@@ -291,9 +295,9 @@ public class MealService {
     private void assertMenuOptionNotAlreadyAdded(long mealLogId, long optionId) {
         Integer count = jdbcTemplate.queryForObject("""
                         select count(*)
-                        from diet_entry_item
-                        where diet_entry_id = ?
-                          and source_option_id = ?
+                        from meal_log_item
+                        where meal_log_id = ?
+                          and source_menu_option_id = ?
                         """,
                 Integer.class,
                 mealLogId,
@@ -306,9 +310,9 @@ public class MealService {
 
     private List<MealLogItemResponse> mealLogItems(long userId, long mealLogId) {
         return jdbcTemplate.query("""
-                        select i.diet_item_id,
+                        select i.meal_log_item_id,
                                i.food_id,
-                               i.source_option_id,
+                               i.source_menu_option_id,
                                i.item_name_snapshot,
                                i.amount_g,
                                i.is_excluded,
@@ -318,20 +322,20 @@ public class MealService {
                                coalesce(sum(case when n.nutrient_code = 'FAT_G' then v.amount_per_100g * i.amount_g / 100 end), 0) as fat_g,
                                coalesce(sum(case when n.nutrient_code = 'SUGAR_G' then v.amount_per_100g * i.amount_g / 100 end), 0) as sugar_g,
                                coalesce(sum(case when n.nutrient_code = 'SODIUM_MG' then v.amount_per_100g * i.amount_g / 100 end), 0) as sodium_mg
-                        from diet_entry_item i
+                        from meal_log_item i
                         left join food_nutrient_value v on v.food_id = i.food_id
                         left join nutrient n on n.nutrient_id = v.nutrient_id
-                        where i.diet_entry_id = ?
-                        group by i.diet_item_id, i.food_id, i.source_option_id, i.item_name_snapshot, i.amount_g, i.is_excluded
-                        order by i.diet_item_id
+                        where i.meal_log_id = ?
+                        group by i.meal_log_item_id, i.food_id, i.source_menu_option_id, i.item_name_snapshot, i.amount_g, i.is_excluded
+                        order by i.meal_log_item_id
                         """,
                 (rs, rowNum) -> {
                     Long foodId = rs.getObject("food_id", Long.class);
                     String itemName = rs.getString("item_name_snapshot");
                     return new MealLogItemResponse(
-                            rs.getLong("diet_item_id"),
+                            rs.getLong("meal_log_item_id"),
                             foodId,
-                            (Long) rs.getObject("source_option_id"),
+                            (Long) rs.getObject("source_menu_option_id"),
                             itemName,
                             rs.getBigDecimal("amount_g"),
                             rs.getBoolean("is_excluded"),
@@ -352,7 +356,7 @@ public class MealService {
                         allergy.foodName(),
                         itemName,
                         "FOOD",
-                        allergy.foodName() + " 알레르기 음식과 일치합니다. 알레르기 유발 음식이 포함되어 있을 수 있습니다."
+                        allergyWarningMessage(allergy.foodName())
                 ));
             }
         }
@@ -365,7 +369,7 @@ public class MealService {
                         keyword.allergyName(),
                         itemName,
                         keyword.source(),
-                        keyword.allergyName() + " 원재료가 이름에 포함되어 있습니다. 알레르기 유발 원재료가 포함되어 있을 수 있습니다."
+                        allergyWarningMessage(keyword.allergyName())
                 ));
             }
         }
@@ -377,7 +381,7 @@ public class MealService {
                         match.allergyName(),
                         match.ingredientName(),
                         "FOOD_INGREDIENT",
-                        match.allergyName() + " 원재료가 음식 원재료 목록에 포함되어 있습니다."
+                        allergyWarningMessage(match.allergyName())
                 ));
             }
         }
@@ -387,9 +391,10 @@ public class MealService {
     private List<UserFoodAllergy> userFoodAllergies(long userId) {
         return jdbcTemplate.query("""
                         select a.food_id, f.food_name
-                        from user_food_allergy a
+                        from user_allergy a
                         join food f on f.food_id = a.food_id
                         where a.user_id = ?
+                          and a.allergy_type = 'FOOD'
                         """,
                 (rs, rowNum) -> new UserFoodAllergy(rs.getLong("food_id"), rs.getString("food_name")),
                 userId
@@ -400,8 +405,9 @@ public class MealService {
         Set<UserIngredientKeyword> keywords = new LinkedHashSet<>();
         keywords.addAll(jdbcTemplate.query("""
                         select allergy_name, normalized_allergy_name as keyword, 'USER_INPUT' as source
-                        from user_ingredient_allergy
+                        from user_allergy
                         where user_id = ?
+                          and allergy_type = 'INGREDIENT'
                         """,
                 (rs, rowNum) -> new UserIngredientKeyword(
                         rs.getString("allergy_name"),
@@ -412,9 +418,10 @@ public class MealService {
         ));
         keywords.addAll(jdbcTemplate.query("""
                         select uia.allergy_name, i.normalized_name as keyword, 'INGREDIENT' as source
-                        from user_ingredient_allergy uia
+                        from user_allergy uia
                         join ingredient i on i.ingredient_id = uia.ingredient_id
                         where uia.user_id = ?
+                          and uia.allergy_type = 'INGREDIENT'
                         """,
                 (rs, rowNum) -> new UserIngredientKeyword(
                         rs.getString("allergy_name"),
@@ -425,9 +432,10 @@ public class MealService {
         ));
         keywords.addAll(jdbcTemplate.query("""
                         select uia.allergy_name, ia.normalized_alias as keyword, 'INGREDIENT_ALIAS' as source
-                        from user_ingredient_allergy uia
+                        from user_allergy uia
                         join ingredient_alias ia on ia.ingredient_id = uia.ingredient_id
                         where uia.user_id = ?
+                          and uia.allergy_type = 'INGREDIENT'
                         """,
                 (rs, rowNum) -> new UserIngredientKeyword(
                         rs.getString("allergy_name"),
@@ -442,10 +450,11 @@ public class MealService {
     private List<FoodIngredientMatch> foodIngredientMatches(long userId, long foodId) {
         return jdbcTemplate.query("""
                         select distinct uia.allergy_name, i.ingredient_name
-                        from user_ingredient_allergy uia
+                        from user_allergy uia
                         join food_ingredient fi on fi.ingredient_id = uia.ingredient_id
                         join ingredient i on i.ingredient_id = fi.ingredient_id
                         where uia.user_id = ?
+                          and uia.allergy_type = 'INGREDIENT'
                           and fi.food_id = ?
                         """,
                 (rs, rowNum) -> new FoodIngredientMatch(
@@ -455,6 +464,10 @@ public class MealService {
                 userId,
                 foodId
         );
+    }
+
+    private String allergyWarningMessage(String allergyName) {
+        return ALLERGY_WARNING_MESSAGE.formatted(allergyName);
     }
 
     private void addAllergyWarning(Map<String, MealAllergyWarning> warnings, MealAllergyWarning warning) {
@@ -481,10 +494,10 @@ public class MealService {
                                coalesce(sum(case when n.nutrient_code = 'FAT_G' then v.amount_per_100g * i.amount_g / 100 end), 0) as fat_g,
                                coalesce(sum(case when n.nutrient_code = 'SUGAR_G' then v.amount_per_100g * i.amount_g / 100 end), 0) as sugar_g,
                                coalesce(sum(case when n.nutrient_code = 'SODIUM_MG' then v.amount_per_100g * i.amount_g / 100 end), 0) as sodium_mg
-                        from diet_entry_item i
+                        from meal_log_item i
                         left join food_nutrient_value v on v.food_id = i.food_id
                         left join nutrient n on n.nutrient_id = v.nutrient_id
-                        where i.diet_entry_id = ?
+                        where i.meal_log_id = ?
                           and i.is_excluded = false
                         """,
                 (rs, rowNum) -> NutrientTotals.from(rs),
@@ -500,12 +513,12 @@ public class MealService {
                                coalesce(sum(case when n.nutrient_code = 'FAT_G' then v.amount_per_100g * i.amount_g / 100 end), 0) as fat_g,
                                coalesce(sum(case when n.nutrient_code = 'SUGAR_G' then v.amount_per_100g * i.amount_g / 100 end), 0) as sugar_g,
                                coalesce(sum(case when n.nutrient_code = 'SODIUM_MG' then v.amount_per_100g * i.amount_g / 100 end), 0) as sodium_mg
-                        from diet_entry d
-                        join diet_entry_item i on i.diet_entry_id = d.diet_entry_id
+                        from meal_log d
+                        join meal_log_item i on i.meal_log_id = d.meal_log_id
                         left join food_nutrient_value v on v.food_id = i.food_id
                         left join nutrient n on n.nutrient_id = v.nutrient_id
                         where d.user_id = ?
-                          and d.consumed_date = ?
+                          and d.log_date = ?
                           and i.is_excluded = false
                         """,
                 (rs, rowNum) -> NutrientTotals.from(rs),
@@ -764,26 +777,22 @@ public class MealService {
         ));
     }
 
-    private long mealTypeId(String mealType) {
+    private String normalizeMealType(String mealType) {
         String normalized = mealType == null ? "" : mealType.trim().toUpperCase(Locale.ROOT);
-        return jdbcTemplate.query("""
-                        select meal_type_id
-                        from meal_type
-                        where meal_type_code = ?
-                        """,
-                (rs, rowNum) -> rs.getLong("meal_type_id"),
-                normalized
-        ).stream().findFirst().orElseThrow(() -> DomainException.badRequest(
-                "MEAL_TYPE_INVALID",
-                "mealType은 BREAKFAST, LUNCH, DINNER, SNACK 중 하나여야 합니다."
-        ));
+        if (!List.of("BREAKFAST", "LUNCH", "DINNER", "SNACK").contains(normalized)) {
+            throw DomainException.badRequest(
+                    "MEAL_TYPE_INVALID",
+                    "mealType은 BREAKFAST, LUNCH, DINNER, SNACK 중 하나여야 합니다."
+            );
+        }
+        return normalized;
     }
 
     private void assertMealLogOwner(long userId, long mealLogId) {
         boolean exists = jdbcTemplate.queryForObject("""
                         select count(*)
-                        from diet_entry
-                        where user_id = ? and diet_entry_id = ?
+                        from meal_log
+                        where user_id = ? and meal_log_id = ?
                         """,
                 Integer.class,
                 userId,
@@ -819,6 +828,9 @@ public class MealService {
     }
 
     private record FoodIngredientMatch(String allergyName, String ingredientName) {
+    }
+
+    private record UserUniversity(Long universityId) {
     }
 
     private record NutritionProfile(

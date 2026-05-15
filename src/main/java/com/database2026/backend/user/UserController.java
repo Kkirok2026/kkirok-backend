@@ -2,11 +2,11 @@ package com.database2026.backend.user;
 
 import com.database2026.backend.auth.JwtAuthService;
 import com.database2026.backend.common.ApiResponse;
-import com.database2026.backend.user.UserDtos.FoodAllergyAddRequest;
-import com.database2026.backend.user.UserDtos.FoodAllergyListResponse;
 import com.database2026.backend.user.UserDtos.HealthProfileResponse;
 import com.database2026.backend.user.UserDtos.MeResponse;
 import com.database2026.backend.user.UserDtos.ProfileUpdateRequest;
+import com.database2026.backend.user.UserDtos.UserAllergyAddRequest;
+import com.database2026.backend.user.UserDtos.UserAllergyListResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -58,47 +58,47 @@ public class UserController {
 
     @GetMapping("/me/allergies")
     @Operation(
-            summary = "내 알레르기 음식 목록 조회",
-            description = "음식 검색 결과에서 foodId로 등록한 알레르기/주의 음식 목록을 반환합니다. 원재료 알레르기 목록은 /api/v1/users/me/ingredient-allergies를 사용합니다."
+            summary = "내 알레르기 목록 조회",
+            description = "음식(FOOD)과 원재료(INGREDIENT)로 등록한 알레르기/주의 항목을 한 목록으로 반환합니다."
     )
-    ApiResponse<FoodAllergyListResponse> foodAllergies(@RequestHeader(HttpHeaders.AUTHORIZATION) String authorization) {
+    ApiResponse<UserAllergyListResponse> allergies(@RequestHeader(HttpHeaders.AUTHORIZATION) String authorization) {
         long userId = jwtAuthService.requireUserId(authorization);
-        return ApiResponse.success(userService.foodAllergies(userId));
+        return ApiResponse.success(userService.allergies(userId));
     }
 
     @PostMapping("/me/allergies")
     @Operation(
-            summary = "음식 알레르기 추가",
+            summary = "알레르기 추가",
             description = """
-                    음식 검색 결과의 foodId를 사용자의 알레르기/주의 음식으로 저장합니다.
-                    이 API는 우유, 계란, 땅콩 같은 원재료 알레르기가 아니라 라면, 김치찌개, 저지방 우유처럼 특정 음식 데이터 자체를 저장할 때 사용합니다.
-                    이후 식단 항목의 foodId가 등록된 foodId와 정확히 일치하면 FOOD_MATCH 경고가 내려갑니다.
-                    원재료 포함 여부까지 넓게 경고하려면 /api/v1/users/me/ingredient-allergies에 ingredientId를 등록해야 합니다.
+                    사용자가 선택한 음식 또는 원재료를 알레르기/주의 항목으로 저장합니다.
+                    FOOD는 음식 검색 결과의 foodId와 식단 항목 foodId가 정확히 일치할 때 경고합니다.
+                    INGREDIENT는 원재료 검색 결과의 ingredientId 또는 직접 입력한 ingredientName을 저장하고, 메뉴명/음식 원재료/원재료 별칭과 매칭되면 경고합니다.
+                    요청 예시: {"allergyType":"FOOD","targetId":3101,"reactionNote":"주의"} 또는 {"allergyType":"INGREDIENT","ingredientName":"우유","reactionNote":"주의"}
                     """
     )
-    ApiResponse<FoodAllergyListResponse> addFoodAllergy(
+    ApiResponse<UserAllergyListResponse> addAllergy(
             @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization,
-            @Valid @RequestBody FoodAllergyAddRequest request
+            @Valid @RequestBody UserAllergyAddRequest request
     ) {
         long userId = jwtAuthService.requireUserId(authorization);
-        return ApiResponse.success(userService.addFoodAllergy(userId, request));
+        return ApiResponse.success(userService.addAllergy(userId, request));
     }
 
-    @DeleteMapping("/me/allergies/{foodId}")
+    @DeleteMapping("/me/allergies/{allergyId}")
     @Operation(
-            summary = "음식 알레르기 삭제",
-            description = "등록된 음식 알레르기 중 요청한 foodId와 일치하는 항목을 삭제합니다. 원재료 알레르기 삭제는 /api/v1/users/me/ingredient-allergies/{allergyId}를 사용합니다."
+            summary = "알레르기 삭제",
+            description = "GET /api/v1/users/me/allergies 응답의 allergyId를 사용해 음식/원재료 알레르기 항목을 삭제합니다."
     )
-    ApiResponse<FoodAllergyListResponse> deleteFoodAllergy(
+    ApiResponse<UserAllergyListResponse> deleteAllergy(
             @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization,
-            @PathVariable long foodId
+            @PathVariable long allergyId
     ) {
         long userId = jwtAuthService.requireUserId(authorization);
-        return ApiResponse.success(userService.deleteFoodAllergy(userId, foodId));
+        return ApiResponse.success(userService.deleteAllergy(userId, allergyId));
     }
 
     @DeleteMapping("/me")
-    @Operation(summary = "회원 탈퇴", description = "내 계정과 세션, 프로필, 학교 인증, 식단 기록, 알레르기 정보를 삭제합니다.")
+    @Operation(summary = "회원 탈퇴", description = "내 계정과 토큰 무효화 기록, 프로필, 학교 인증, 식단 기록, 알레르기 정보를 삭제합니다.")
     ApiResponse<Void> deleteMe(@RequestHeader(HttpHeaders.AUTHORIZATION) String authorization) {
         long userId = jwtAuthService.requireUserId(authorization);
         userService.deleteMe(userId);

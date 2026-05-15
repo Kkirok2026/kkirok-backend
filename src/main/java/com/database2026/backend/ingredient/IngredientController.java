@@ -46,7 +46,10 @@ public class IngredientController {
     }
 
     @GetMapping("/users/me/ingredient-allergies")
-    @Operation(summary = "내 원재료 알레르기 목록 조회")
+    @Operation(
+            summary = "내 원재료 알레르기 목록 조회",
+            description = "하위 호환용 API입니다. 실제 저장 테이블은 /api/v1/users/me/allergies와 같은 user_allergy이며, allergyType=INGREDIENT 항목만 반환합니다."
+    )
     @SecurityRequirement(name = "bearerAuth")
     ApiResponse<UserIngredientAllergyListResponse> userIngredientAllergies(
             @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization
@@ -56,7 +59,10 @@ public class IngredientController {
     }
 
     @PostMapping("/users/me/ingredient-allergies")
-    @Operation(summary = "내 원재료 알레르기 추가", description = "원재료 검색 결과의 ingredientId 또는 직접 입력한 ingredientName을 저장합니다.")
+    @Operation(
+            summary = "내 원재료 알레르기 추가",
+            description = "하위 호환용 API입니다. 원재료 검색 결과의 ingredientId 또는 직접 입력한 ingredientName을 user_allergy에 allergyType=INGREDIENT로 저장합니다."
+    )
     @SecurityRequirement(name = "bearerAuth")
     ApiResponse<UserIngredientAllergyListResponse> addUserIngredientAllergy(
             @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization,
@@ -67,7 +73,10 @@ public class IngredientController {
     }
 
     @PostMapping("/users/me/ingredient-allergies/bulk")
-    @Operation(summary = "내 원재료 알레르기 여러 개 추가", description = "프론트에서 선택한 여러 원재료 알레르기를 한 번에 저장합니다.")
+    @Operation(
+            summary = "내 원재료 알레르기 여러 개 추가",
+            description = "하위 호환용 API입니다. 프론트에서 선택한 여러 원재료 알레르기를 user_allergy에 allergyType=INGREDIENT로 한 번에 저장합니다."
+    )
     @SecurityRequirement(name = "bearerAuth")
     ApiResponse<UserIngredientAllergyListResponse> addUserIngredientAllergies(
             @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization,
@@ -78,7 +87,7 @@ public class IngredientController {
     }
 
     @DeleteMapping("/users/me/ingredient-allergies/{allergyId}")
-    @Operation(summary = "내 원재료 알레르기 삭제")
+    @Operation(summary = "내 원재료 알레르기 삭제", description = "user_allergy의 allergyType=INGREDIENT 항목을 allergyId로 삭제합니다.")
     @SecurityRequirement(name = "bearerAuth")
     ApiResponse<UserIngredientAllergyListResponse> deleteUserIngredientAllergy(
             @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization,

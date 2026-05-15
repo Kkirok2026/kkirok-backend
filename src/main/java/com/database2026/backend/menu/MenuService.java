@@ -26,6 +26,9 @@ import org.springframework.stereotype.Service;
 @Service
 public class MenuService {
 
+    private static final String ALLERGY_WARNING_MESSAGE =
+            "%s 알레르기 항목이 포함되어 있을 수 있습니다. 섭취 전 원재료를 확인하세요.";
+
     private final JdbcTemplate jdbcTemplate;
 
     public MenuService(JdbcTemplate jdbcTemplate) {
@@ -120,15 +123,16 @@ public class MenuService {
     }
 
     public void assertUserCanCompare(long userId, long universityId) {
-        Long selectedUniversityId = jdbcTemplate.query("""
-                        select primary_university_id
+        UserUniversity userUniversity = jdbcTemplate.query("""
+                        select university_id
                         from user_account
                         where user_id = ?
                           and status = 'ACTIVE'
                         """,
-                (rs, rowNum) -> (Long) rs.getObject("primary_university_id"),
+                (rs, rowNum) -> new UserUniversity(rs.getObject("university_id", Long.class)),
                 userId
         ).stream().findFirst().orElseThrow(() -> DomainException.notFound("USER_NOT_FOUND", "사용자를 찾을 수 없습니다."));
+        Long selectedUniversityId = userUniversity.universityId();
         if (selectedUniversityId == null) {
             throw DomainException.badRequest("SCHOOL_EMAIL_USER_REQUIRED", "식당 메뉴 비교는 학교 이메일로 인증된 사용자만 이용할 수 있습니다.");
         }
@@ -154,7 +158,6 @@ public class MenuService {
                                coalesce(sum(case when n.nutrient_code = 'SODIUM_MG' then v.amount_per_100g * mi.amount_g / 100 end), 0) as sodium_mg
                         from cafeteria_menu m
                         join dining_place dp on dp.dining_place_id = m.dining_place_id
-                        join meal_type mt on mt.meal_type_id = m.meal_type_id
                         join cafeteria_menu_option o on o.menu_id = m.menu_id
                         left join menu_category c on c.category_id = o.category_id
                         left join cafeteria_menu_item mi on mi.option_id = o.option_id
@@ -162,7 +165,7 @@ public class MenuService {
                         left join nutrient n on n.nutrient_id = v.nutrient_id
                         where dp.university_id = ?
                           and m.served_date = ?
-                          and mt.meal_type_code = ?
+                          and m.meal_type = ?
                           and dp.is_active = true
                           and o.is_available = true
                         group by dp.dining_place_id,
@@ -200,14 +203,13 @@ public class MenuService {
                         from cafeteria_menu_option o
                         join cafeteria_menu m on m.menu_id = o.menu_id
                         join dining_place dp on dp.dining_place_id = m.dining_place_id
-                        join meal_type mt on mt.meal_type_id = m.meal_type_id
                         where o.option_id = ?
                           and dp.university_id = ?
                           and dp.dining_place_type = 'STUDENT'
                           and dp.is_active = true
                           and o.is_available = true
                           and m.served_date = ?
-                          and mt.meal_type_code = ?
+                          and m.meal_type = ?
                         """,
                 Integer.class,
                 studentOptionId,
@@ -260,7 +262,7 @@ public class MenuService {
                             allergy.foodName(),
                             item.rawItemName(),
                             "FOOD",
-                            allergy.foodName() + " 알레르기 음식과 매칭되는 메뉴 항목입니다."
+                            allergyWarningMessage(allergy.foodName())
                     ));
                 }
             }
@@ -273,7 +275,7 @@ public class MenuService {
                             keyword.allergyName(),
                             item.rawItemName(),
                             keyword.source(),
-                            keyword.allergyName() + " 원재료가 포함되어 있을 가능성이 있습니다."
+                            allergyWarningMessage(keyword.allergyName())
                     ));
                 }
             }
@@ -285,7 +287,7 @@ public class MenuService {
                             match.allergyName(),
                             match.ingredientName(),
                             "FOOD_INGREDIENT",
-                            match.allergyName() + " 원재료가 음식 원재료 목록과 매칭됩니다."
+                            allergyWarningMessage(match.allergyName())
                     ));
                 }
             }
@@ -296,9 +298,10 @@ public class MenuService {
     private List<UserFoodAllergy> userFoodAllergies(long userId) {
         return jdbcTemplate.query("""
                         select a.food_id, f.food_name
-                        from user_food_allergy a
+                        from user_allergy a
                         join food f on f.food_id = a.food_id
                         where a.user_id = ?
+                          and a.allergy_type = 'FOOD'
                         """,
                 (rs, rowNum) -> new UserFoodAllergy(rs.getLong("food_id"), rs.getString("food_name")),
                 userId
@@ -309,8 +312,9 @@ public class MenuService {
         Set<UserIngredientKeyword> keywords = new LinkedHashSet<>();
         keywords.addAll(jdbcTemplate.query("""
                         select allergy_name, normalized_allergy_name as keyword, 'USER_INPUT' as source
-                        from user_ingredient_allergy
+                        from user_allergy
                         where user_id = ?
+                          and allergy_type = 'INGREDIENT'
                         """,
                 (rs, rowNum) -> new UserIngredientKeyword(
                         rs.getString("allergy_name"),
@@ -321,9 +325,10 @@ public class MenuService {
         ));
         keywords.addAll(jdbcTemplate.query("""
                         select uia.allergy_name, i.normalized_name as keyword, 'INGREDIENT' as source
-                        from user_ingredient_allergy uia
+                        from user_allergy uia
                         join ingredient i on i.ingredient_id = uia.ingredient_id
                         where uia.user_id = ?
+                          and uia.allergy_type = 'INGREDIENT'
                         """,
                 (rs, rowNum) -> new UserIngredientKeyword(
                         rs.getString("allergy_name"),
@@ -334,9 +339,10 @@ public class MenuService {
         ));
         keywords.addAll(jdbcTemplate.query("""
                         select uia.allergy_name, ia.normalized_alias as keyword, 'INGREDIENT_ALIAS' as source
-                        from user_ingredient_allergy uia
+                        from user_allergy uia
                         join ingredient_alias ia on ia.ingredient_id = uia.ingredient_id
                         where uia.user_id = ?
+                          and uia.allergy_type = 'INGREDIENT'
                         """,
                 (rs, rowNum) -> new UserIngredientKeyword(
                         rs.getString("allergy_name"),
@@ -351,10 +357,11 @@ public class MenuService {
     private List<FoodIngredientMatch> foodIngredientMatches(long userId, long foodId) {
         return jdbcTemplate.query("""
                         select distinct uia.allergy_name, i.ingredient_name
-                        from user_ingredient_allergy uia
+                        from user_allergy uia
                         join food_ingredient fi on fi.ingredient_id = uia.ingredient_id
                         join ingredient i on i.ingredient_id = fi.ingredient_id
                         where uia.user_id = ?
+                          and uia.allergy_type = 'INGREDIENT'
                           and fi.food_id = ?
                         """,
                 (rs, rowNum) -> new FoodIngredientMatch(
@@ -364,6 +371,10 @@ public class MenuService {
                 userId,
                 foodId
         );
+    }
+
+    private String allergyWarningMessage(String allergyName) {
+        return ALLERGY_WARNING_MESSAGE.formatted(allergyName);
     }
 
     private void addWarning(Map<String, MenuAllergyWarning> warnings, MenuAllergyWarning warning) {
@@ -415,5 +426,8 @@ public class MenuService {
     }
 
     private record FoodIngredientMatch(String allergyName, String ingredientName) {
+    }
+
+    private record UserUniversity(Long universityId) {
     }
 }

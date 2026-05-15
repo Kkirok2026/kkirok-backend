@@ -62,36 +62,48 @@ public final class UserDtos {
     ) {
     }
 
-    @Schema(description = "음식 검색 결과를 알레르기/주의 음식으로 저장하는 요청. 원재료 알레르기가 아니라 특정 foodId 음식 자체를 저장합니다.")
-    public record FoodAllergyAddRequest(
-            @NotNull
+    @Schema(description = "음식 또는 원재료를 알레르기/주의 항목으로 저장하는 요청")
+    public record UserAllergyAddRequest(
+            @NotBlank
             @Schema(
-                    description = "음식 검색 API(/api/v1/foods/search)에서 받은 foodId. 식단 항목의 foodId가 이 값과 정확히 일치하면 FOOD_MATCH 경고가 발생합니다.",
+                    description = "등록 타입. FOOD는 특정 음식 데이터, INGREDIENT는 원재료/재료명을 의미합니다.",
+                    allowableValues = {"FOOD", "INGREDIENT"},
+                    example = "INGREDIENT"
+            )
+            String allergyType,
+            @Schema(
+                    description = "선택한 대상 ID. FOOD이면 foodId, INGREDIENT이면 ingredientId입니다. foodId/ingredientId 필드 대신 사용할 수 있습니다.",
                     example = "3101"
             )
+            Long targetId,
+            @Schema(description = "하위 호환용 음식 ID. allergyType=FOOD일 때 targetId 대신 사용할 수 있습니다.", example = "3101")
             Long foodId,
-            @Schema(description = "사용자가 기록하는 반응 메모. 없으면 null 또는 빈 문자열로 보냅니다.", example = "먹으면 속이 불편함")
+            @Schema(description = "하위 호환용 원재료 ID. allergyType=INGREDIENT일 때 targetId 대신 사용할 수 있습니다.", example = "2")
+            Long ingredientId,
+            @Schema(description = "원재료를 직접 입력할 때 사용하는 이름. ingredientId가 없을 때만 사용합니다.", example = "우유")
+            String ingredientName,
+            @Schema(description = "사용자가 기록하는 반응 메모. 없으면 null 또는 빈 문자열로 보냅니다.", example = "주의")
             String reactionNote
     ) {
     }
 
-    @Schema(description = "사용자가 foodId 기준으로 등록한 알레르기/주의 음식 목록")
-    public record FoodAllergyListResponse(
-            @Schema(description = "등록된 음식 알레르기 목록") List<FoodAllergyItem> items
+    @Schema(description = "사용자가 등록한 음식/원재료 알레르기 목록")
+    public record UserAllergyListResponse(
+            @Schema(description = "등록된 알레르기/주의 항목 목록") List<UserAllergyItem> items
     ) {
     }
 
-    @Schema(description = "foodId 기준 알레르기/주의 음식 항목")
-    public record FoodAllergyItem(
-            @Schema(description = "음식 알레르기 등록 번호", example = "1")
+    @Schema(description = "사용자가 등록한 알레르기/주의 항목")
+    public record UserAllergyItem(
+            @Schema(description = "FOOD 또는 INGREDIENT", example = "FOOD")
+            String allergyType,
+            @Schema(description = "알레르기 등록 번호", example = "3")
             Long allergyId,
-            @Schema(description = "등록된 음식의 foodId", example = "3101")
-            Long foodId,
-            @Schema(description = "등록된 음식명", example = "라면")
-            String foodName,
-            @Schema(description = "음식 데이터의 분류", example = "면류")
-            String sourceCategory,
-            @Schema(description = "사용자가 입력한 반응 메모", example = "먹으면 속이 불편함")
+            @Schema(description = "FOOD이면 foodId, INGREDIENT이면 ingredientId", example = "3101")
+            Long targetId,
+            @Schema(description = "음식명 또는 원재료명", example = "라면")
+            String name,
+            @Schema(description = "사용자가 입력한 반응 메모", example = "주의")
             String reactionNote
     ) {
     }

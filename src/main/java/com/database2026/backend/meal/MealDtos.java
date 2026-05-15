@@ -59,9 +59,9 @@ public final class MealDtos {
     }
 
     public record MealLogItemResponse(
-            Long dietItemId,
+            Long mealLogItemId,
             Long foodId,
-            Long sourceOptionId,
+            Long sourceMenuOptionId,
             String itemName,
             BigDecimal amountG,
             Boolean excluded,

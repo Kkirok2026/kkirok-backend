@@ -203,8 +203,7 @@ public class FoodService {
                 update user_custom_food
                 set food_name = ?,
                     normalized_food_name = ?,
-                    serving_amount_g = ?,
-                    updated_at = current_timestamp
+                    serving_amount_g = ?
                 where user_id = ?
                   and food_id = ?
                 """, foodName, normalizedFoodName, amountG, userId, foodId);

@@ -87,24 +87,22 @@ public class AuthService {
         long userId;
         try {
             userId = sqlSupport.insert("""
-                    insert into user_account (primary_university_id, email, password_hash, name, age)
-                    values (?, ?, ?, ?, ?)
+                    insert into user_account (
+                        university_id, email, password_hash, name, age,
+                        student_email, is_student_verified
+                    )
+                    values (?, ?, ?, ?, ?, ?, ?)
                     """,
                     universityId,
                     email,
                     passwordEncoder.encode(request.password()),
                     request.name(),
-                    request.age()
+                    request.age(),
+                    universityId == null ? null : email,
+                    universityId != null
             );
         } catch (DuplicateKeyException exception) {
             throw DomainException.conflict("EMAIL_ALREADY_EXISTS", "이미 가입된 이메일입니다.");
-        }
-
-        if (universityId != null) {
-            sqlSupport.update("""
-                    insert into student_verifications (user_id, university_id, student_email, status, verified_at)
-                    values (?, ?, ?, ?, ?)
-                    """, userId, universityId, email, "VERIFIED", LocalDateTime.now());
         }
 
         String token = jwtAuthService.createAccessToken(userId);
@@ -114,15 +112,20 @@ public class AuthService {
     @Transactional
     public AuthResponse login(LoginRequest request) {
         UserLoginRow user = jdbcTemplate.query("""
-                        select u.user_id, u.primary_university_id, u.password_hash, p.bmi
+                        select u.user_id,
+                               u.university_id,
+                               u.password_hash,
+                               u.is_student_verified,
+                               p.bmi
                         from user_account u
                         left join user_health_profile p on p.user_id = u.user_id
                         where u.email = ? and u.status = 'ACTIVE'
                         """,
                 (rs, rowNum) -> new UserLoginRow(
                         rs.getLong("user_id"),
-                        (Long) rs.getObject("primary_university_id"),
+                        (Long) rs.getObject("university_id"),
                         rs.getString("password_hash"),
+                        rs.getBoolean("is_student_verified"),
                         rs.getBigDecimal("bmi")
                 ),
                 normalizeEmail(request.email())
@@ -134,11 +137,10 @@ public class AuthService {
         if (!passwordEncoder.matches(request.password(), user.passwordHash())) {
             throw DomainException.unauthorized("LOGIN_FAILED", "이메일 또는 비밀번호가 올바르지 않습니다.");
         }
-        if (user.universityId() != null) {
-            assertSchoolVerified(user.userId(), user.universityId());
+        if (user.universityId() != null && !user.studentVerified()) {
+            throw DomainException.unauthorized("SCHOOL_EMAIL_NOT_VERIFIED", "학교 이메일 인증이 완료되지 않았습니다.");
         }
 
-        jdbcTemplate.update("update user_account set last_login_at = current_timestamp where user_id = ?", user.userId());
         String token = jwtAuthService.createAccessToken(user.userId());
         return new AuthResponse(user.userId(), user.universityId(), token, user.bmi(), user.bmi() != null);
     }
@@ -191,23 +193,6 @@ public class AuthService {
                 """, verification.verificationId());
     }
 
-    private void assertSchoolVerified(Long userId, Long universityId) {
-        boolean verified = jdbcTemplate.queryForObject("""
-                        select count(*)
-                        from student_verifications
-                        where user_id = ?
-                          and university_id = ?
-                          and status = 'VERIFIED'
-                        """,
-                Integer.class,
-                userId,
-                universityId
-        ) > 0;
-        if (!verified) {
-            throw DomainException.unauthorized("SCHOOL_EMAIL_NOT_VERIFIED", "학교 이메일 인증이 완료되지 않았습니다.");
-        }
-    }
-
     private Optional<UniversityByDomain> universityByEmailDomain(String email) {
         String domain = extractEmailDomain(email);
         return jdbcTemplate.query("""
@@ -241,7 +226,7 @@ public class AuthService {
         return "%06d".formatted(secureRandom.nextInt(1_000_000));
     }
 
-    private record UserLoginRow(Long userId, Long universityId, String passwordHash, BigDecimal bmi) {
+    private record UserLoginRow(Long userId, Long universityId, String passwordHash, boolean studentVerified, BigDecimal bmi) {
     }
 
     private record VerificationCodeRow(Long verificationId, String codeHash) {

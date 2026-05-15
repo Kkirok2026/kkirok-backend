@@ -104,16 +104,16 @@ public class MealController {
         return ApiResponse.success(mealService.addMenuOption(userId, request));
     }
 
-    @PatchMapping("/meal-logs/{mealLogId}/items/{dietItemId}/exclude")
+    @PatchMapping("/meal-logs/{mealLogId}/items/{mealLogItemId}/exclude")
     @Operation(summary = "식단 항목 제외/복구", description = "홈 요약 계산에서 제외할지 여부를 변경합니다.")
     ApiResponse<MealLogResponse> setExcluded(
             @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization,
             @PathVariable long mealLogId,
-            @PathVariable long dietItemId,
+            @PathVariable long mealLogItemId,
             @RequestParam(defaultValue = "true") boolean excluded
     ) {
         long userId = jwtAuthService.requireUserId(authorization);
-        return ApiResponse.success(mealService.setExcluded(userId, mealLogId, dietItemId, excluded));
+        return ApiResponse.success(mealService.setExcluded(userId, mealLogId, mealLogItemId, excluded));
     }
 
     @GetMapping("/home/daily-summary")

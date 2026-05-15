@@ -1,79 +1,87 @@
 # 끼록 MVP ERD
 
-이번 1차 구현은 기능보다 데이터베이스 설계를 우선해, MySQL용 Flyway migration 기반으로 구성한다. 실제 구현 SQL은 `src/main/resources/db/migration`에 버전별로 저장한다. 기존 초안 대비 주요 수정점은 다음과 같다.
+이번 1차 구현은 기능보다 데이터베이스 설계를 우선해, MySQL용 Flyway migration 기반으로 구성한다. 실제 구현 SQL과 Java migration은 `src/main/resources/db/migration`, `src/main/java/db/migration`에 버전별로 저장한다.
 
-- 학교 인증은 이메일 도메인으로 대학교를 자동 판별하고, `universities`, `university_email_domains`, `student_verifications`로 분리한다. 현재는 한 학교만 쓰지만, 다른 대학교 도메인/인증 정책을 추가할 수 있다.
-- 회원가입 시 나이를 입력받아 `user_account.age`에 저장한다.
-- 가입 후 입력한 키, 현재 몸무게, 목표 몸무게, 성별은 `user_health_profile`에 저장하고 BMI는 서버에서 현재 키/몸무게 기준으로 계산해 `bmi` 컬럼에 저장한다.
-- 학생식당 점심의 한상한담/ONE PLATE/Noodle/셀프라면 같은 분류와 생활관식당 PDF의 점심/저녁 메뉴 구분은 `cafeteria_menu_option.category_id`로 표현한다.
-- 식단 제외는 삭제가 아니라 `diet_entry_item.is_excluded`로 처리해 원본 기록을 보존한다.
+## 반영한 설계 기준
+
+- 학교는 사용자가 직접 선택하지 않고 이메일 도메인으로 자동 판별한다. 도메인이 등록된 학교 이메일이면 `user_account.university_id`, `student_email`, `is_student_verified`에 저장한다.
+- 이메일 인증코드는 회원가입이 완료되기 전 검증이 필요하므로 `school_email_verification_code`에 해시, 만료시간, 사용시간을 저장한다.
+- 로그인 세션 테이블은 제거했고, JWT 로그아웃 처리를 위해 무효화된 토큰만 `auth_token_revocation`에 저장한다.
+- `diet_entry`, `diet_entry_item`은 서비스 용어에 맞춰 `meal_log`, `meal_log_item`으로 변경했다.
+- `meal_type` 테이블은 제거하고 `meal_log.meal_type`, `cafeteria_menu.meal_type` 코드값으로 직접 저장한다.
+- 식단 제외는 삭제가 아니라 `meal_log_item.is_excluded`로 처리해 원본 기록을 보존한다.
+- 학생식당 점심의 한상한담/ONE PLATE/Noodle/셀프라면 같은 분류와 생활관식당 점심/저녁 메뉴 구분은 `cafeteria_menu_option.category_id`로 표현한다.
 - 음식 별칭 검색 확장은 `food_alias` 테이블을 둬서 데이터만 추가해도 검색에 반영되도록 했다.
+- 법정 알레르기 전용 테이블은 제거했고, 우유/계란/땅콩 같은 알레르기 가능 재료도 일반 `ingredient` 및 `ingredient_alias` 데이터로 관리한다.
+- 사용자 알레르기는 음식과 원재료를 나누어 별도 테이블에 저장하지 않고 `user_allergy` 하나에 `FOOD`, `INGREDIENT` 타입으로 저장한다.
+- 개인별 권장섭취량은 프로필 기반 공식으로 조회 시 계산하므로 `nutrition_standard_group`, `nutrition_standard_value` 테이블은 제거했다.
 
 ```mermaid
 erDiagram
     UNIVERSITIES ||--o{ UNIVERSITY_EMAIL_DOMAINS : has
-    UNIVERSITIES ||--o{ USER_ACCOUNT : primary_school
-    UNIVERSITIES ||--o{ STUDENT_VERIFICATIONS : verifies
+    UNIVERSITIES ||--o{ USER_ACCOUNT : matched_by_email
+    UNIVERSITIES ||--o{ SCHOOL_EMAIL_VERIFICATION_CODE : issues
     UNIVERSITIES ||--o{ DINING_PLACE : operates
 
     USER_ACCOUNT ||--|| USER_HEALTH_PROFILE : has
-    USER_ACCOUNT ||--o{ STUDENT_VERIFICATIONS : owns
-    USER_ACCOUNT ||--o{ AUTH_SESSIONS : logs_in
-    USER_ACCOUNT ||--o{ DIET_ENTRY : records
-
-    MEAL_TYPE ||--o{ CAFETERIA_MENU : classifies
-    MEAL_TYPE ||--o{ DIET_ENTRY : classifies
+    USER_ACCOUNT ||--o{ AUTH_TOKEN_REVOCATION : revokes
+    USER_ACCOUNT ||--o{ MEAL_LOG : records
+    USER_ACCOUNT ||--o{ USER_CUSTOM_FOOD : owns
+    USER_ACCOUNT ||--o{ USER_ALLERGY : has
 
     DINING_PLACE ||--o{ CAFETERIA_MENU : publishes
     CAFETERIA_MENU ||--o{ CAFETERIA_MENU_OPTION : has
     MENU_CATEGORY ||--o{ CAFETERIA_MENU_OPTION : categorizes
     CAFETERIA_MENU_OPTION ||--o{ CAFETERIA_MENU_ITEM : includes
-    CAFETERIA_MENU_OPTION ||--o{ DIET_ENTRY_ITEM : source_of
+    CAFETERIA_MENU_OPTION ||--o{ MEAL_LOG_ITEM : source_menu
 
     FOOD ||--o{ FOOD_ALIAS : has
     FOOD ||--o{ FOOD_NUTRIENT_VALUE : measured_as
     FOOD ||--o{ CAFETERIA_MENU_ITEM : mapped_to
-    FOOD ||--o{ DIET_ENTRY_ITEM : eaten_as
+    FOOD ||--o{ MEAL_LOG_ITEM : logged_as
+    FOOD ||--o{ USER_CUSTOM_FOOD : custom_master
+    FOOD ||--o{ USER_ALLERGY : allergy_food_target
+    FOOD ||--o{ FOOD_INGREDIENT : made_of
+
     NUTRIENT ||--o{ FOOD_NUTRIENT_VALUE : defines
-    NUTRIENT ||--o{ NUTRITION_STANDARD_VALUE : targets
 
-    DIET_ENTRY ||--o{ DIET_ENTRY_ITEM : contains
+    MEAL_LOG ||--o{ MEAL_LOG_ITEM : contains
 
-    NUTRITION_STANDARD_GROUP ||--o{ NUTRITION_STANDARD_VALUE : defines
+    INGREDIENT ||--o{ INGREDIENT_ALIAS : has
+    INGREDIENT ||--o{ FOOD_INGREDIENT : used_in
+    INGREDIENT ||--o{ USER_ALLERGY : allergy_ingredient_target
 
     UNIVERSITIES {
         bigint university_id PK
         varchar university_name UK
-        timestamp created_at
     }
 
     UNIVERSITY_EMAIL_DOMAINS {
         bigint domain_id PK
         bigint university_id FK
         varchar email_domain UK
-        varchar verification_method
-        boolean is_active
     }
 
     USER_ACCOUNT {
         bigint user_id PK
-        bigint primary_university_id FK
+        bigint university_id FK
         varchar email UK
         varchar password_hash
         varchar name
         int age
         varchar status
-        timestamp created_at
-        timestamp last_login_at
+        varchar student_email
+        boolean is_student_verified
     }
 
-    STUDENT_VERIFICATIONS {
+    SCHOOL_EMAIL_VERIFICATION_CODE {
         bigint verification_id PK
-        bigint user_id FK
         bigint university_id FK
         varchar student_email
-        varchar status
-        timestamp verified_at
+        varchar purpose
+        varchar code_hash
+        timestamp expires_at
+        timestamp consumed_at
     }
 
     USER_HEALTH_PROFILE {
@@ -83,16 +91,13 @@ erDiagram
         decimal target_weight_kg
         varchar gender
         decimal bmi
-        timestamp updated_at
+        varchar activity_level
     }
 
-    AUTH_SESSIONS {
-        bigint session_id PK
+    AUTH_TOKEN_REVOCATION {
+        varchar token_jti PK
         bigint user_id FK
-        varchar access_token UK
-        timestamp issued_at
         timestamp expires_at
-        timestamp revoked_at
     }
 
     DINING_PLACE {
@@ -102,12 +107,6 @@ erDiagram
         varchar dining_place_type
         varchar menu_source_url
         boolean is_active
-    }
-
-    MEAL_TYPE {
-        bigint meal_type_id PK
-        varchar meal_type_code UK
-        varchar meal_type_name
     }
 
     MENU_CATEGORY {
@@ -120,9 +119,8 @@ erDiagram
     CAFETERIA_MENU {
         bigint menu_id PK
         bigint dining_place_id FK
-        bigint meal_type_id FK
+        varchar meal_type
         date served_date
-        timestamp crawled_at
     }
 
     CAFETERIA_MENU_OPTION {
@@ -174,45 +172,70 @@ erDiagram
         decimal amount_per_100g
     }
 
-    DIET_ENTRY {
-        bigint diet_entry_id PK
+    USER_CUSTOM_FOOD {
+        bigint custom_food_id PK
         bigint user_id FK
-        bigint meal_type_id FK
-        date consumed_date
-        varchar memo
-        timestamp created_at
-        timestamp updated_at
+        bigint food_id FK
+        varchar food_name
+        varchar normalized_food_name
+        decimal serving_amount_g
     }
 
-    DIET_ENTRY_ITEM {
-        bigint diet_item_id PK
-        bigint diet_entry_id FK
+    MEAL_LOG {
+        bigint meal_log_id PK
+        bigint user_id FK
+        varchar meal_type
+        date log_date
+        varchar memo
+    }
+
+    MEAL_LOG_ITEM {
+        bigint meal_log_item_id PK
+        bigint meal_log_id FK
         bigint food_id FK
-        bigint source_option_id FK
+        bigint source_menu_option_id FK
         varchar item_name_snapshot
         decimal amount_g
         boolean is_excluded
     }
 
-    NUTRITION_STANDARD_GROUP {
-        bigint standard_group_id PK
-        varchar gender
-        decimal height_min_cm
-        decimal height_max_cm
-        decimal weight_min_kg
-        decimal weight_max_kg
-        decimal bmi_min
-        decimal bmi_max
+    INGREDIENT {
+        bigint ingredient_id PK
         varchar source_name
-        varchar description
+        varchar source_code
+        varchar ingredient_name
+        varchar normalized_name UK
+        varchar large_category
+        varchar middle_category
+        varchar english_name
     }
 
-    NUTRITION_STANDARD_VALUE {
-        bigint standard_group_id PK,FK
-        bigint nutrient_id PK,FK
-        decimal recommended_amount
-        decimal upper_limit_amount
-        varchar basis
+    INGREDIENT_ALIAS {
+        bigint alias_id PK
+        bigint ingredient_id FK
+        varchar alias_name
+        varchar normalized_alias
+        varchar alias_type
+    }
+
+    FOOD_INGREDIENT {
+        bigint food_id PK,FK
+        bigint ingredient_id PK,FK
+        varchar source_name
+        varchar source_reference
+        varchar raw_ingredient_name
+        varchar confidence
+    }
+
+    USER_ALLERGY {
+        bigint allergy_id PK
+        bigint user_id FK
+        varchar allergy_type
+        bigint food_id FK
+        bigint ingredient_id FK
+        varchar allergy_name
+        varchar normalized_allergy_name
+        varchar reaction_note
     }
 ```
 
@@ -220,10 +243,13 @@ erDiagram
 
 - `user_account.email`은 전역 유니크다.
 - `user_account.age`는 1 이상 120 이하 값으로 저장한다.
-- `student_verifications`는 `(university_id, student_email)` 유니크로 학교별 인증 이메일 중복을 막는다.
+- 학교 이메일 인증 결과는 `user_account.university_id`, `student_email`, `is_student_verified`에 저장한다.
+- `school_email_verification_code`는 인증코드 원문이 아니라 해시만 저장한다.
 - `user_health_profile.user_id`는 PK이자 FK라 사용자당 프로필은 1개만 존재한다.
-- `cafeteria_menu`는 `(dining_place_id, meal_type_id, served_date)` 유니크다.
+- `cafeteria_menu`는 `(dining_place_id, meal_type, served_date)` 유니크다.
 - `cafeteria_menu_option`은 `(menu_id, option_name)` 유니크다.
-- `diet_entry`는 `(user_id, meal_type_id, consumed_date)` 유니크라 하루 한 끼 기록을 하나로 모은다.
+- `meal_log`는 `(user_id, meal_type, log_date)` 유니크라 하루 한 끼 기록을 하나로 모은다.
 - `food_alias`는 `(food_id, normalized_alias)` 유니크다.
-- `food_nutrient_value`와 `nutrition_standard_value`는 복합 PK로 영양소별 값을 관리한다.
+- `user_custom_food`는 `(user_id, normalized_food_name)` 유니크라 같은 사용자가 같은 직접 등록 음식을 중복 저장하지 않는다.
+- `food_nutrient_value`는 `(food_id, nutrient_id)` 복합 PK로 영양소별 값을 관리한다.
+- `user_allergy`는 `(user_id, allergy_type, normalized_allergy_name)` 유니크라 같은 타입의 알레르기를 중복 등록하지 않는다.

@@ -1,18 +1,20 @@
 package com.database2026.backend.user;
 
 import com.database2026.backend.common.DomainException;
-import com.database2026.backend.user.UserDtos.FoodAllergyAddRequest;
-import com.database2026.backend.user.UserDtos.FoodAllergyItem;
-import com.database2026.backend.user.UserDtos.FoodAllergyListResponse;
 import com.database2026.backend.user.UserDtos.HealthProfileResponse;
 import com.database2026.backend.user.UserDtos.MeResponse;
 import com.database2026.backend.user.UserDtos.ProfileUpdateRequest;
 import com.database2026.backend.user.UserDtos.StudentVerificationResponse;
+import com.database2026.backend.user.UserDtos.UserAllergyAddRequest;
+import com.database2026.backend.user.UserDtos.UserAllergyItem;
+import com.database2026.backend.user.UserDtos.UserAllergyListResponse;
 import com.database2026.backend.user.UserDtos.UniversityResponse;
+import com.database2026.backend.support.SqlSupport;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -22,9 +24,11 @@ import org.springframework.transaction.annotation.Transactional;
 public class UserService {
 
     private final JdbcTemplate jdbcTemplate;
+    private final SqlSupport sqlSupport;
 
-    public UserService(JdbcTemplate jdbcTemplate) {
+    public UserService(JdbcTemplate jdbcTemplate, SqlSupport sqlSupport) {
         this.jdbcTemplate = jdbcTemplate;
+        this.sqlSupport = sqlSupport;
     }
 
     public MeResponse me(long userId) {
@@ -41,12 +45,14 @@ public class UserService {
                                p.target_weight_kg,
                                p.bmi,
                                p.activity_level,
-                               sv.student_email,
-                               sv.status as verification_status
+                               u.student_email,
+                               case
+                                   when u.is_student_verified = true then 'VERIFIED'
+                                   else null
+                               end as verification_status
                         from user_account u
-                        left join universities univ on univ.university_id = u.primary_university_id
+                        left join universities univ on univ.university_id = u.university_id
                         left join user_health_profile p on p.user_id = u.user_id
-                        left join student_verifications sv on sv.user_id = u.user_id and sv.university_id = univ.university_id
                         where u.user_id = ?
                         """,
                 (rs, rowNum) -> new MeResponse(
@@ -114,8 +120,7 @@ public class UserService {
                                         target_weight_kg = values(target_weight_kg),
                                         gender = values(gender),
                                         bmi = values(bmi),
-                                        activity_level = values(activity_level),
-                                        updated_at = current_timestamp
+                                        activity_level = values(activity_level)
                 """, userId, request.heightCm(), request.weightKg(), request.targetWeightKg(), request.gender(), bmi, activityLevel);
         return new HealthProfileResponse(
                 request.gender(),
@@ -127,23 +132,22 @@ public class UserService {
         );
     }
 
-    public FoodAllergyListResponse foodAllergies(long userId) {
-        return new FoodAllergyListResponse(jdbcTemplate.query("""
+    public UserAllergyListResponse allergies(long userId) {
+        return new UserAllergyListResponse(jdbcTemplate.query("""
                         select a.allergy_id,
-                               f.food_id,
-                               f.food_name,
-                               f.source_category,
+                               a.allergy_type,
+                               coalesce(a.food_id, a.ingredient_id) as target_id,
+                               a.allergy_name,
                                a.reaction_note
-                        from user_food_allergy a
-                        join food f on f.food_id = a.food_id
+                        from user_allergy a
                         where a.user_id = ?
-                        order by f.food_name
+                        order by a.allergy_type, a.allergy_name
                         """,
-                (rs, rowNum) -> new FoodAllergyItem(
+                (rs, rowNum) -> new UserAllergyItem(
+                        rs.getString("allergy_type"),
                         rs.getLong("allergy_id"),
-                        rs.getLong("food_id"),
-                        rs.getString("food_name"),
-                        rs.getString("source_category"),
+                        rs.getObject("target_id", Long.class),
+                        rs.getString("allergy_name"),
                         rs.getString("reaction_note")
                 ),
                 userId
@@ -151,32 +155,39 @@ public class UserService {
     }
 
     @Transactional
-    public FoodAllergyListResponse addFoodAllergy(long userId, FoodAllergyAddRequest request) {
-        assertAllergyFoodExists(request.foodId());
+    public UserAllergyListResponse addAllergy(long userId, UserAllergyAddRequest request) {
+        AllergyTarget target = allergyTarget(request);
+        String note = normalizeNote(request.reactionNote());
         try {
             jdbcTemplate.update("""
-                    insert into user_food_allergy (user_id, food_id, reaction_note)
-                    values (?, ?, ?)
-                    """, userId, request.foodId(), normalizeNote(request.reactionNote()));
+                    insert into user_allergy (
+                        user_id, allergy_type, food_id, ingredient_id, allergy_name, normalized_allergy_name, reaction_note
+                    )
+                    values (?, ?, ?, ?, ?, ?, ?)
+                    """, userId, target.allergyType(), target.foodId(), target.ingredientId(), target.name(), normalize(target.name()), note);
         } catch (DuplicateKeyException exception) {
             jdbcTemplate.update("""
-                    update user_food_allergy
-                    set reaction_note = ?
+                    update user_allergy
+                    set food_id = ?,
+                        ingredient_id = ?,
+                        allergy_name = ?,
+                        reaction_note = ?
                     where user_id = ?
-                      and food_id = ?
-                    """, normalizeNote(request.reactionNote()), userId, request.foodId());
+                      and allergy_type = ?
+                      and normalized_allergy_name = ?
+                    """, target.foodId(), target.ingredientId(), target.name(), note, userId, target.allergyType(), normalize(target.name()));
         }
-        return foodAllergies(userId);
+        return allergies(userId);
     }
 
     @Transactional
-    public FoodAllergyListResponse deleteFoodAllergy(long userId, long foodId) {
+    public UserAllergyListResponse deleteAllergy(long userId, long allergyId) {
         jdbcTemplate.update("""
-                delete from user_food_allergy
+                delete from user_allergy
                 where user_id = ?
-                  and food_id = ?
-                """, userId, foodId);
-        return foodAllergies(userId);
+                  and allergy_id = ?
+                """, userId, allergyId);
+        return allergies(userId);
     }
 
     @Transactional
@@ -215,19 +226,97 @@ public class UserService {
         }
     }
 
-    private void assertAllergyFoodExists(long foodId) {
-        boolean exists = jdbcTemplate.queryForObject("""
-                        select count(*)
+    private AllergyTarget allergyTarget(UserAllergyAddRequest request) {
+        String type = normalizeAllergyType(request.allergyType());
+        if ("FOOD".equals(type)) {
+            long foodId = firstNonNull(request.targetId(), request.foodId(), "FOOD_ID_REQUIRED", "FOOD 알레르기는 targetId 또는 foodId가 필요합니다.");
+            FoodLookup food = foodLookup(foodId);
+            return new AllergyTarget(type, food.foodId(), null, food.foodName());
+        }
+
+        Long ingredientId = request.targetId() != null ? request.targetId() : request.ingredientId();
+        IngredientLookup ingredient = ingredientId == null
+                ? upsertIngredient(requiredTrim(request.ingredientName(), "INGREDIENT_NAME_REQUIRED", "INGREDIENT 알레르기는 targetId, ingredientId, ingredientName 중 하나가 필요합니다."))
+                : ingredientLookup(ingredientId);
+        return new AllergyTarget(type, null, ingredient.ingredientId(), ingredient.ingredientName());
+    }
+
+    private String normalizeAllergyType(String allergyType) {
+        String normalized = allergyType == null ? "" : allergyType.trim().toUpperCase(Locale.ROOT);
+        if (!List.of("FOOD", "INGREDIENT").contains(normalized)) {
+            throw DomainException.badRequest("ALLERGY_TYPE_INVALID", "allergyType은 FOOD 또는 INGREDIENT여야 합니다.");
+        }
+        return normalized;
+    }
+
+    private long firstNonNull(Long primary, Long secondary, String code, String message) {
+        Long value = primary != null ? primary : secondary;
+        if (value == null) {
+            throw DomainException.badRequest(code, message);
+        }
+        return value;
+    }
+
+    private FoodLookup foodLookup(long foodId) {
+        return jdbcTemplate.query("""
+                        select food_id, food_name
                         from food
                         where food_id = ?
-                          and source_name = 'MFDS_INTEGRATED'
                         """,
-                Integer.class,
+                (rs, rowNum) -> new FoodLookup(rs.getLong("food_id"), rs.getString("food_name")),
                 foodId
-        ) > 0;
-        if (!exists) {
-            throw DomainException.notFound("FOOD_NOT_FOUND", "음식을 찾을 수 없습니다.");
+        ).stream().findFirst().orElseThrow(() -> DomainException.notFound("FOOD_NOT_FOUND", "음식을 찾을 수 없습니다."));
+    }
+
+    private IngredientLookup ingredientLookup(long ingredientId) {
+        return jdbcTemplate.query("""
+                        select ingredient_id, ingredient_name
+                        from ingredient
+                        where ingredient_id = ?
+                        """,
+                (rs, rowNum) -> new IngredientLookup(rs.getLong("ingredient_id"), rs.getString("ingredient_name")),
+                ingredientId
+        ).stream().findFirst().orElseThrow(() -> DomainException.notFound("INGREDIENT_NOT_FOUND", "원재료를 찾을 수 없습니다."));
+    }
+
+    private IngredientLookup upsertIngredient(String ingredientName) {
+        String normalizedName = normalize(ingredientName);
+        Optional<IngredientLookup> existing = jdbcTemplate.query("""
+                        select ingredient_id, ingredient_name
+                        from ingredient
+                        where normalized_name = ?
+                        """,
+                (rs, rowNum) -> new IngredientLookup(rs.getLong("ingredient_id"), rs.getString("ingredient_name")),
+                normalizedName
+        ).stream().findFirst();
+        if (existing.isPresent()) {
+            return existing.get();
         }
+        long ingredientId = sqlSupport.insert("""
+                insert into ingredient (source_name, ingredient_name, normalized_name)
+                values ('USER_INPUT', ?, ?)
+                """, ingredientName, normalizedName);
+        insertIngredientAlias(ingredientId, ingredientName);
+        return new IngredientLookup(ingredientId, ingredientName);
+    }
+
+    private void insertIngredientAlias(long ingredientId, String ingredientName) {
+        try {
+            jdbcTemplate.update("""
+                    insert into ingredient_alias (ingredient_id, alias_name, normalized_alias, alias_type)
+                    values (?, ?, ?, 'USER_INPUT')
+                    """, ingredientId, ingredientName, normalize(ingredientName));
+        } catch (DuplicateKeyException ignored) {
+            // Existing aliases are stable search data.
+        }
+    }
+
+    private String requiredTrim(String value, String code, String message) {
+        String trimmed = value == null ? "" : value.trim();
+        if (trimmed.isBlank()) {
+            throw DomainException.badRequest(code, message);
+        }
+        return trimmed;
     }
 
     private String normalizeNote(String note) {
@@ -261,5 +350,23 @@ public class UserService {
             );
         }
         return normalized;
+    }
+
+    private String normalize(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.trim()
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("[\\s_\\-()\\[\\]{}]", "");
+    }
+
+    private record AllergyTarget(String allergyType, Long foodId, Long ingredientId, String name) {
+    }
+
+    private record FoodLookup(Long foodId, String foodName) {
+    }
+
+    private record IngredientLookup(Long ingredientId, String ingredientName) {
     }
 }

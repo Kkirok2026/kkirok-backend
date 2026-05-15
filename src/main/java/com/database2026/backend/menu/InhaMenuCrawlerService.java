@@ -342,22 +342,21 @@ public class InhaMenuCrawlerService {
     }
 
     private long upsertMenu(long diningPlaceId, CrawledMenu menu) {
-        long mealTypeId = mealTypeId(menu.mealType());
         jdbcTemplate.update("""
-                insert into cafeteria_menu (dining_place_id, meal_type_id, served_date)
+                insert into cafeteria_menu (dining_place_id, meal_type, served_date)
                 values (?, ?, ?)
-                on duplicate key update crawled_at = current_timestamp
-                """, diningPlaceId, mealTypeId, menu.servedDate());
+                on duplicate key update menu_id = menu_id
+                """, diningPlaceId, menu.mealType(), menu.servedDate());
         return jdbcTemplate.query("""
                         select menu_id
                         from cafeteria_menu
                         where dining_place_id = ?
-                          and meal_type_id = ?
+                          and meal_type = ?
                           and served_date = ?
                         """,
                 (rs, rowNum) -> rs.getLong("menu_id"),
                 diningPlaceId,
-                mealTypeId,
+                menu.mealType(),
                 menu.servedDate()
         ).getFirst();
     }
@@ -433,17 +432,6 @@ public class InhaMenuCrawlerService {
             }
         }
         return List.of(cleaned);
-    }
-
-    private long mealTypeId(String mealTypeCode) {
-        return jdbcTemplate.query("""
-                        select meal_type_id
-                        from meal_type
-                        where meal_type_code = ?
-                        """,
-                (rs, rowNum) -> rs.getLong("meal_type_id"),
-                mealTypeCode
-        ).getFirst();
     }
 
     private Long categoryId(String categoryCode) {

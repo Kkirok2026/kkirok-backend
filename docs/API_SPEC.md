@@ -129,13 +129,13 @@
 
 `DELETE /users/me`
 
-현재 로그인한 계정을 삭제한다. 삭제 시 계정, 로그인 세션, 건강 프로필, 학교 인증 정보, 식단 기록/항목, 알레르기 음식, 학교 이메일 인증코드를 함께 삭제한다.
+현재 로그인한 계정을 삭제한다. 삭제 시 계정, 토큰 무효화 기록, 건강 프로필, 학교 인증 정보, 식단 기록/항목, 알레르기 정보, 학교 이메일 인증코드를 함께 삭제한다.
 
 ### 건강 프로필 수정
 
 `PUT /users/me/profile`
 
-회원가입 후 키/현재 몸무게/목표 몸무게/성별을 처음 입력하거나 수정하고 BMI를 다시 계산한다. 알레르기 정보는 같은 건강 프로필 영역에서 원재료 알레르기 API로 등록한다. `targetWeightKg`는 선택 값이며, 보내지 않거나 `null`로 보내면 목표 몸무게를 설정하지 않은 상태로 저장된다.
+회원가입 후 키/현재 몸무게/목표 몸무게/성별을 처음 입력하거나 수정하고 BMI를 다시 계산한다. 알레르기 정보는 같은 건강 프로필 영역에서 알레르기 API로 등록한다. `targetWeightKg`는 선택 값이며, 보내지 않거나 `null`로 보내면 목표 몸무게를 설정하지 않은 상태로 저장된다.
 
 ```json
 {
@@ -146,11 +146,11 @@
 }
 ```
 
-### 내 알레르기 음식 관리
+### 내 알레르기 관리
 
-사용자는 자유입력 대신 음식 검색 결과에서 `foodId`를 선택해 알레르기 음식을 저장한다. 음식 검색과 알레르기 등록은 식약처 음식 마스터(`MFDS_INTEGRATED`)만 대상으로 하며, 식당 메뉴 원문은 알레르기 음식으로 직접 저장하지 않는다.
+사용자는 음식 검색 결과의 `foodId` 또는 원재료 검색 결과의 `ingredientId`를 선택해 알레르기/주의 항목을 저장한다. 검색 결과가 없는 원재료는 `ingredientName`으로 직접 등록할 수 있다.
 
-원재료 기반 경고는 아래 원재료 알레르기 API를 함께 사용한다.
+음식 알레르기(`FOOD`)는 식단 항목의 `foodId`가 정확히 일치할 때 경고한다. 원재료 알레르기(`INGREDIENT`)는 메뉴명, 음식 원재료, 원재료 별칭과 매칭될 때 경고한다. 응답의 경고 문구는 동일하게 `"알레르기 항목이 포함되어 있을 수 있습니다. 섭취 전 원재료를 확인하세요."` 형식으로 내려간다.
 
 조회:
 
@@ -162,44 +162,66 @@
 
 ```json
 {
-  "foodId": 3001,
+  "allergyType": "FOOD",
+  "targetId": 3001,
   "reactionNote": "먹으면 두드러기"
 }
 ```
 
-삭제:
-
-`DELETE /users/me/allergies/{foodId}`
-
-### 원재료 알레르기 관리
-
-원재료 검색:
-
-`GET /ingredients/search?q=호박&limit=20`
-
-로컬 원재료 DB를 먼저 검색하고, 식약처 식품 원재료 정보 API 키가 있으면 외부 API 결과를 DB에 캐싱한 뒤 반환한다.
-
-원재료 알레르기 등록:
-
-`POST /users/me/ingredient-allergies`
-
 ```json
 {
-  "ingredientId": 1,
+  "allergyType": "INGREDIENT",
+  "targetId": 1,
   "reactionNote": "호박이 들어간 음식은 피해야 함"
 }
 ```
 
-검색 결과 없이 직접 등록하는 것도 가능하다.
-
 ```json
 {
+  "allergyType": "INGREDIENT",
   "ingredientName": "호박",
   "reactionNote": "호박 알레르기"
 }
 ```
 
-여러 개를 선택한 뒤 한 번에 등록:
+삭제:
+
+`DELETE /users/me/allergies/{allergyId}`
+
+응답 예시:
+
+```json
+{
+  "items": [
+    {
+      "allergyType": "FOOD",
+      "allergyId": 3,
+      "targetId": 3101,
+      "name": "라면",
+      "reactionNote": "주의"
+    },
+    {
+      "allergyType": "INGREDIENT",
+      "allergyId": 4,
+      "targetId": 2,
+      "name": "우유",
+      "reactionNote": "주의"
+    }
+  ]
+}
+```
+
+### 원재료 검색과 하위 호환 API
+
+원재료 검색:
+
+`GET /ingredients/search?q=호박&limit=20`
+
+로컬 원재료 DB를 먼저 검색하고, 식약처 식품 원재료 정보 API 키가 있으면 외부 API 결과를 DB에 캐싱한 뒤 반환한다. 우유, 계란, 땅콩 같은 법정 알레르기 가능 재료도 별도 법정 알레르기 테이블이 아니라 `ingredient`/`ingredient_alias`에 포함된다.
+
+기존 원재료 알레르기 API는 하위 호환용으로 유지한다. 내부 저장 테이블은 `/users/me/allergies`와 같은 `user_allergy`이고, `allergyType=INGREDIENT` 항목만 처리한다.
+
+여러 원재료를 선택한 뒤 한 번에 등록:
 
 `POST /users/me/ingredient-allergies/bulk`
 
@@ -402,7 +424,7 @@
 
 ### 식단 항목 제외/복구
 
-`PATCH /meal-logs/{mealLogId}/items/{dietItemId}/exclude?excluded=true`
+`PATCH /meal-logs/{mealLogId}/items/{mealLogItemId}/exclude?excluded=true`
 
 제외된 항목은 기록에는 남지만 홈 요약 계산에서는 빠진다.
 
@@ -414,7 +436,7 @@
 
 메인 홈 화면에서 사용하는 API다. 그날 제외되지 않은 식단 항목의 총 칼로리, 탄수화물, 단백질, 지방을 조회 시점에 계산해 반환한다. 당과 나트륨도 함께 내려간다.
 
-총합은 DB에 별도로 저장하지 않고 `diet_entry`, `diet_entry_item`, `food_nutrient_value`, `nutrient`를 조인해 계산한다. 사용자가 식단을 추가/제외하면 다음 조회 때 자동으로 최신 값이 반영된다.
+총합은 DB에 별도로 저장하지 않고 `meal_log`, `meal_log_item`, `food_nutrient_value`, `nutrient`를 조인해 계산한다. 사용자가 식단을 추가/제외하면 다음 조회 때 자동으로 최신 값이 반영된다.
 
 ```json
 {
@@ -431,7 +453,7 @@
 }
 ```
 
-사용자 건강 프로필이 있으면 `nutrition_standard_group/value` 기준 상한을 넘을 때 경고를 반환한다. 프로필이 없으면 `warnings`는 빈 배열이다.
+사용자 건강 프로필이 있으면 나이, 성별, 키, 몸무게, 활동수준을 바탕으로 권장 섭취량을 조회 시점에 계산하고, 권장 범위를 넘을 때 경고를 반환한다. 프로필이 없으면 `recommendedTargets`는 `null`, `warnings`는 빈 배열이다.
 
 탄수화물 초과 예시:
 
@@ -453,4 +475,4 @@
 | `gender` | `MALE`, `FEMALE`, `OTHER` |
 | `mealType` | `BREAKFAST`, `LUNCH`, `DINNER`, `SNACK` |
 | `diningPlaceType` | `STUDENT`, `DORMITORY` |
-| `studentVerification.status` | `PENDING`, `DOMAIN_VERIFIED`, `VERIFIED`, `REJECTED` |
+| `studentVerification.status` | `VERIFIED` 또는 `null` |
