@@ -36,13 +36,14 @@ public class InhaMenuCrawlerService {
     private static final URI INHA_STUDENT_MENU_PAGE_URI = URI.create("https://www.inha.ac.kr/kr/1072/subview.do");
     private static final URI INHA_STUDENT_MENU_URI = URI.create("https://www.inha.ac.kr/diet/kr/2/view.do");
     private static final DateTimeFormatter INHA_MENU_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy.MM.dd");
-    private static final Pattern DAY_HEADING_PATTERN = Pattern.compile("(?is)<h2\\b[^>]*class=\"[^\"]*objHeading_h2[^\"]*\"[^>]*>(.*?)</h2>");
+    private static final String INHA_MENU_USER_AGENT = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1";
+    private static final Pattern DAY_HEADING_PATTERN = Pattern.compile("(?is)<h2\\b[^>]*>(.*?\\d{1,2}[./]\\d{1,2}.*?)</h2>");
     private static final Pattern MEAL_HEADING_PATTERN = Pattern.compile("(?is)<h3\\b[^>]*>(.*?)</h3>");
     private static final Pattern TABLE_ROW_PATTERN = Pattern.compile("(?is)<tr\\b[^>]*>(.*?)</tr>");
     private static final Pattern TABLE_CELL_PATTERN = Pattern.compile("(?is)<t[dh]\\b[^>]*>(.*?)</t[dh]>");
     private static final Pattern WEEK_MONDAY_PATTERN = Pattern.compile("name=[\"']monday[\"'][^>]*value=[\"'](\\d{4})\\.(\\d{1,2})\\.(\\d{1,2})[\"']");
     private static final Pattern DATE_PATTERN = Pattern.compile("(\\d{1,2})/(\\d{1,2})");
-    private static final Pattern DAY_HEADING_DATE_PATTERN = Pattern.compile("(\\d{1,2})\\.(\\d{1,2})\\.");
+    private static final Pattern DAY_HEADING_DATE_PATTERN = Pattern.compile("(\\d{1,2})[./](\\d{1,2})\\.?");
     private static final Pattern KCAL_PATTERN = Pattern.compile("(\\d{2,4})\\s*[kK][cC][aA][lL]");
     private static final Pattern FIRST_NUMBER_PATTERN = Pattern.compile("\\d+");
 
@@ -51,6 +52,7 @@ public class InhaMenuCrawlerService {
     private final HttpClient httpClient;
     private final String inhaMenuCookie;
     private final String inhaMenuLayout;
+    private final boolean matchFoodOnCrawl;
     private final Duration timeout;
 
     public InhaMenuCrawlerService(
@@ -58,12 +60,14 @@ public class InhaMenuCrawlerService {
             MenuFoodMatcher menuFoodMatcher,
             @Value("${inha.menu.cookie:}") String inhaMenuCookie,
             @Value("${inha.menu.layout:J3sRfz6SuHMYDlWbLXHbgQ==}") String inhaMenuLayout,
+            @Value("${inha.menu.match-food-on-crawl:false}") boolean matchFoodOnCrawl,
             @Value("${inha.menu.timeout-ms:5000}") long timeoutMs
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.menuFoodMatcher = menuFoodMatcher;
         this.inhaMenuCookie = inhaMenuCookie == null ? "" : inhaMenuCookie.trim();
         this.inhaMenuLayout = inhaMenuLayout == null ? "" : inhaMenuLayout.trim();
+        this.matchFoodOnCrawl = matchFoodOnCrawl;
         this.timeout = Duration.ofMillis(timeoutMs);
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(this.timeout)
@@ -78,16 +82,25 @@ public class InhaMenuCrawlerService {
 
     @Transactional
     public InhaMenuCrawlResponse crawlStudentDining(LocalDate targetDate) {
-        String html = fetch(targetDate);
-        if (requiresSso(html)) {
-            throw DomainException.unauthorized(
-                    "INHA_MENU_REQUIRES_AUTH",
-                    "인하대 학생식당 메뉴 페이지가 SSO 인증 화면을 반환했습니다. 공개 HTML 접근이 가능한 URL 또는 세션이 필요합니다."
-            );
+        String html = fetchStudentMenuPage();
+        boolean requiresAuth = requiresSso(html);
+        List<CrawledMenu> menus = requiresAuth ? List.of() : parseMenus(html);
+
+        if (menus.isEmpty()) {
+            String fallbackHtml = fetchDietView(targetDate);
+            requiresAuth = requiresAuth || requiresSso(fallbackHtml);
+            if (!requiresSso(fallbackHtml)) {
+                menus = parseMenus(fallbackHtml);
+            }
         }
 
-        List<CrawledMenu> menus = parseMenus(html);
         if (menus.isEmpty()) {
+            if (requiresAuth) {
+                throw DomainException.unauthorized(
+                        "INHA_MENU_REQUIRES_AUTH",
+                        "인하대 학생식당 메뉴 페이지가 SSO 인증 화면을 반환했습니다. INHA_MENU_COOKIE에 로그인 세션 쿠키가 필요합니다."
+                );
+            }
             throw DomainException.notFound(
                     "INHA_MENU_NOT_FOUND",
                     "인하대 학생식당 메뉴 표를 찾지 못했습니다. 페이지 HTML 구조를 확인해야 합니다."
@@ -101,7 +114,7 @@ public class InhaMenuCrawlerService {
             long optionId = upsertMenuOption(menuId, menu);
             jdbcTemplate.update("delete from cafeteria_menu_item where option_id = ?", optionId);
             for (String rawItemName : menuFoodMatcher.splitMenuItems(menu.optionName())) {
-                Long foodId = menuFoodMatcher.matchedFoodId(rawItemName);
+                Long foodId = matchFoodOnCrawl ? menuFoodMatcher.matchedFoodId(rawItemName) : null;
                 jdbcTemplate.update("""
                         insert into cafeteria_menu_item (option_id, food_id, raw_item_name, amount_g)
                         values (?, ?, ?, ?)
@@ -113,15 +126,32 @@ public class InhaMenuCrawlerService {
         return new InhaMenuCrawlResponse(importedCount, List.of());
     }
 
-    private String fetch(LocalDate targetDate) {
+    private String fetchStudentMenuPage() {
+        return send(browserRequest(INHA_STUDENT_MENU_PAGE_URI)
+                .GET()
+                .setHeader("Referer", "https://idp.inha.ac.kr:8443/")
+                .header("Sec-Fetch-Dest", "document")
+                .header("Sec-Fetch-Mode", "navigate")
+                .header("Sec-Fetch-Site", "same-site")
+                .header("Upgrade-Insecure-Requests", "1"));
+    }
+
+    private String fetchDietView(LocalDate targetDate) {
         String body = formBody(targetDate);
-        return send(HttpRequest.newBuilder(INHA_STUDENT_MENU_URI)
+        return send(browserRequest(INHA_STUDENT_MENU_URI)
                 .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
-                .timeout(timeout)
-                .header("User-Agent", "Mozilla/5.0")
-                .header("Accept", "text/html,application/xhtml+xml")
                 .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
-                .header("Referer", INHA_STUDENT_MENU_PAGE_URI.toString()));
+                .setHeader("Referer", INHA_STUDENT_MENU_PAGE_URI.toString()));
+    }
+
+    private HttpRequest.Builder browserRequest(URI uri) {
+        return HttpRequest.newBuilder(uri)
+                .timeout(timeout)
+                .header("User-Agent", INHA_MENU_USER_AGENT)
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                .header("Accept-Language", "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7")
+                .header("Cache-Control", "no-cache")
+                .header("Pragma", "no-cache");
     }
 
     private String send(HttpRequest.Builder requestBuilder) {
@@ -575,14 +605,13 @@ public class InhaMenuCrawlerService {
     private long upsertMenuOption(long menuId, CrawledMenu menu) {
         Long categoryId = categoryId(menu.categoryCode());
         jdbcTemplate.update("""
-                insert into cafeteria_menu_option (menu_id, category_id, option_name, source_label, price, is_available, calories_kcal)
-                values (?, ?, ?, ?, ?, true, ?)
+                insert into cafeteria_menu_option (menu_id, category_id, option_name, source_label, is_available, calories_kcal)
+                values (?, ?, ?, ?, true, ?)
                 on duplicate key update category_id = values(category_id),
                                         source_label = values(source_label),
-                                        price = values(price),
                                         is_available = true,
                                         calories_kcal = values(calories_kcal)
-                """, menuId, categoryId, menu.optionName(), menu.categoryLabel(), menu.price(), menu.caloriesKcal());
+                """, menuId, categoryId, menu.optionName(), menu.categoryLabel(), menu.caloriesKcal());
         return jdbcTemplate.query("""
                         select option_id
                         from cafeteria_menu_option

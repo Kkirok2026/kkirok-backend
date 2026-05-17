@@ -326,7 +326,7 @@
 
 `GET /foods/search?q=닭가슴살&limit=20`
 
-FatSecret(`FATSECRET`)을 우선 검색하고, 부족한 결과는 식약처 음식 마스터(`MFDS_INTEGRATED`)와 내 직접 입력 음식(`USER_CUSTOM`)에서 보완한다. 같은 음식명으로 중복되는 검색 결과는 우선순위가 가장 높은 1개만 반환한다. 식당 메뉴 원문은 검색 결과에 포함하지 않는다. 프론트에서는 한글 쿼리를 URL 인코딩해야 한다.
+FatSecret(`FATSECRET`)을 우선 검색하고, 검색 결과가 없으면 FatSecret autocomplete 추천어로 한 번 더 FatSecret 검색을 수행한다. 부족한 결과는 식약처 음식 마스터(`MFDS_INTEGRATED`)와 내 직접 입력 음식(`USER_CUSTOM`)에서 보완한다. 같은 음식명으로 중복되는 검색 결과는 우선순위가 가장 높은 1개만 반환한다. 식당 메뉴 원문은 검색 결과에 포함하지 않는다. 프론트에서는 한글 쿼리를 URL 인코딩해야 한다.
 
 ### 음식 검색어 추천
 

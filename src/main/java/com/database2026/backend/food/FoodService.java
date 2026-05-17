@@ -10,6 +10,7 @@ import com.database2026.backend.food.FoodDtos.FoodSummary;
 import com.database2026.backend.support.SqlSupport;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -63,9 +64,12 @@ public class FoodService {
 
         importFatSecretRows(normalizedQuery, safeLimit);
         List<FoodSummary> items = searchLocal(pattern, compactPattern, safeLimit, currentUserId);
+        if (items.isEmpty()) {
+            items = searchFatSecretSuggestionMatches(normalizedQuery, safeLimit, currentUserId);
+        }
         if (items.size() < safeLimit) {
             importMfdsNutritionRows(normalizedQuery, safeLimit);
-            items = searchLocal(pattern, compactPattern, safeLimit, currentUserId);
+            items = mergeDeduplicated(items, searchLocal(pattern, compactPattern, safeLimit, currentUserId), safeLimit);
         }
         return new FoodSearchResponse(items);
     }
@@ -311,6 +315,42 @@ public class FoodService {
         }
         String value = suggestion.trim();
         suggestions.putIfAbsent(suggestionDeduplicationKey(value), value);
+    }
+
+    private List<FoodSummary> searchFatSecretSuggestionMatches(String query, int limit, Long userId) {
+        List<FoodSummary> matches = new ArrayList<>();
+        String originalKey = suggestionDeduplicationKey(query);
+        for (String suggestion : fatSecretSuggestions(query, Math.min(limit, 10))) {
+            String suggestedQuery = optionalSearchQuery(suggestion);
+            if (suggestedQuery.isBlank() || suggestionDeduplicationKey(suggestedQuery).equals(originalKey)) {
+                continue;
+            }
+            importFatSecretRows(suggestedQuery, limit);
+            String pattern = "%" + suggestedQuery + "%";
+            String compactPattern = "%" + compactQuery(suggestedQuery) + "%";
+            matches = mergeDeduplicated(matches, searchLocal(pattern, compactPattern, limit, userId), limit);
+            if (matches.size() >= limit) {
+                break;
+            }
+        }
+        return matches;
+    }
+
+    private List<FoodSummary> mergeDeduplicated(List<FoodSummary> first, List<FoodSummary> second, int limit) {
+        Map<String, FoodSummary> deduplicated = new LinkedHashMap<>();
+        for (FoodSummary item : first) {
+            deduplicated.putIfAbsent(foodNameDeduplicationKey(item), item);
+            if (deduplicated.size() >= limit) {
+                return List.copyOf(deduplicated.values());
+            }
+        }
+        for (FoodSummary item : second) {
+            deduplicated.putIfAbsent(foodNameDeduplicationKey(item), item);
+            if (deduplicated.size() >= limit) {
+                break;
+            }
+        }
+        return List.copyOf(deduplicated.values());
     }
 
     private List<FoodSummary> deduplicateByFoodName(List<FoodSummary> items, int limit) {
