@@ -150,12 +150,30 @@ public class MenuService {
                                c.category_code,
                                c.category_name,
                                o.option_name,
-                               coalesce(sum(case when n.nutrient_code = 'CALORIES_KCAL' then v.amount_per_100g * mi.amount_g / 100 end), 0) as calories_kcal,
-                               coalesce(sum(case when n.nutrient_code = 'CARB_G' then v.amount_per_100g * mi.amount_g / 100 end), 0) as carb_g,
-                               coalesce(sum(case when n.nutrient_code = 'PROTEIN_G' then v.amount_per_100g * mi.amount_g / 100 end), 0) as protein_g,
-                               coalesce(sum(case when n.nutrient_code = 'FAT_G' then v.amount_per_100g * mi.amount_g / 100 end), 0) as fat_g,
-                               coalesce(sum(case when n.nutrient_code = 'SUGAR_G' then v.amount_per_100g * mi.amount_g / 100 end), 0) as sugar_g,
-                               coalesce(sum(case when n.nutrient_code = 'SODIUM_MG' then v.amount_per_100g * mi.amount_g / 100 end), 0) as sodium_mg
+                               case when sum(case when mi.food_id is not null then 1 else 0 end) > 0
+                                    then coalesce(sum(case when n.nutrient_code = 'CALORIES_KCAL' then v.amount_per_100g * mi.amount_g / 100 end), 0)
+                                    else coalesce(o.calories_kcal, 0)
+                               end as calories_kcal,
+                               case when sum(case when mi.food_id is not null then 1 else 0 end) > 0
+                                    then coalesce(sum(case when n.nutrient_code = 'CARB_G' then v.amount_per_100g * mi.amount_g / 100 end), 0)
+                                    else coalesce(o.carb_g, 0)
+                               end as carb_g,
+                               case when sum(case when mi.food_id is not null then 1 else 0 end) > 0
+                                    then coalesce(sum(case when n.nutrient_code = 'PROTEIN_G' then v.amount_per_100g * mi.amount_g / 100 end), 0)
+                                    else coalesce(o.protein_g, 0)
+                               end as protein_g,
+                               case when sum(case when mi.food_id is not null then 1 else 0 end) > 0
+                                    then coalesce(sum(case when n.nutrient_code = 'FAT_G' then v.amount_per_100g * mi.amount_g / 100 end), 0)
+                                    else coalesce(o.fat_g, 0)
+                               end as fat_g,
+                               case when sum(case when mi.food_id is not null then 1 else 0 end) > 0
+                                    then coalesce(sum(case when n.nutrient_code = 'SUGAR_G' then v.amount_per_100g * mi.amount_g / 100 end), 0)
+                                    else coalesce(o.sugar_g, 0)
+                               end as sugar_g,
+                               case when sum(case when mi.food_id is not null then 1 else 0 end) > 0
+                                    then coalesce(sum(case when n.nutrient_code = 'SODIUM_MG' then v.amount_per_100g * mi.amount_g / 100 end), 0)
+                                    else coalesce(o.sodium_mg, 0)
+                               end as sodium_mg
                         from cafeteria_menu m
                         join dining_place dp on dp.dining_place_id = m.dining_place_id
                         join cafeteria_menu_option o on o.menu_id = m.menu_id
@@ -175,7 +193,13 @@ public class MenuService {
                                  c.category_code,
                                  c.category_name,
                                  o.option_name,
-                                 c.sort_order
+                                 c.sort_order,
+                                 o.calories_kcal,
+                                 o.carb_g,
+                                 o.protein_g,
+                                 o.fat_g,
+                                 o.sugar_g,
+                                 o.sodium_mg
                         order by case when dp.dining_place_type = 'DORMITORY' then 0 else 1 end,
                                  dp.dining_place_name,
                                  c.sort_order,
