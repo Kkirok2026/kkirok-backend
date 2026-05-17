@@ -326,7 +326,13 @@
 
 `GET /foods/search?q=닭가슴살&limit=20`
 
-식약처 음식 마스터(`MFDS_INTEGRATED`)의 음식명과 `food_alias`를 함께 검색한다. 식당 메뉴 원문은 검색 결과에 포함하지 않는다. 프론트에서는 한글 쿼리를 URL 인코딩해야 한다.
+FatSecret(`FATSECRET`)을 우선 검색하고, 부족한 결과는 식약처 음식 마스터(`MFDS_INTEGRATED`)와 내 직접 입력 음식(`USER_CUSTOM`)에서 보완한다. 같은 음식명으로 중복되는 검색 결과는 우선순위가 가장 높은 1개만 반환한다. 식당 메뉴 원문은 검색 결과에 포함하지 않는다. 프론트에서는 한글 쿼리를 URL 인코딩해야 한다.
+
+### 음식 검색어 추천
+
+`GET /foods/suggestions?q=닭가&limit=10`
+
+FatSecret autocomplete를 우선 호출해 추천 검색어 문자열을 반환한다. FatSecret autocomplete는 저장 가능한 음식 식별자를 반환하지 않으므로 `food_alias`에 저장하지 않는다. FatSecret 권한 또는 네트워크 문제로 호출할 수 없으면 로컬 `food.food_name`, `food_alias.alias_name`에서 중복을 제거해 추천어를 반환한다.
 
 ### 음식 상세
 
@@ -438,7 +444,7 @@
 
 메인 홈 화면에서 사용하는 API다. 그날 제외되지 않은 식단 항목의 총 칼로리, 탄수화물, 단백질, 지방을 조회 시점에 계산해 반환한다. 당과 나트륨도 함께 내려간다.
 
-총합은 DB에 별도로 저장하지 않고 `meal_log`, `meal_log_item`, `food_nutrient_value`, `nutrient`를 조인해 계산한다. 사용자가 식단을 추가/제외하면 다음 조회 때 자동으로 최신 값이 반영된다.
+총합은 DB에 별도로 저장하지 않고 `meal_log`, `meal_log_item`, `food`를 조인해 계산한다. 음식별 영양값은 `food` 테이블의 100g 기준 컬럼(`calories_kcal`, `carb_g`, `protein_g`, `fat_g`, `sugar_g`, `sodium_mg`)에 저장한다. 사용자가 식단을 추가/제외하면 다음 조회 때 자동으로 최신 값이 반영된다.
 
 ```json
 {

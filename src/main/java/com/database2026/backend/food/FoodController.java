@@ -5,6 +5,7 @@ import com.database2026.backend.common.ApiResponse;
 import com.database2026.backend.food.FoodDtos.CustomFoodCreateRequest;
 import com.database2026.backend.food.FoodDtos.FoodDetail;
 import com.database2026.backend.food.FoodDtos.FoodSearchResponse;
+import com.database2026.backend.food.FoodDtos.FoodSuggestionResponse;
 import com.database2026.backend.food.FoodDtos.FoodSummary;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -45,6 +46,20 @@ public class FoodController {
     ) {
         Optional<Long> userId = jwtAuthService.optionalUserId(authorization);
         return ApiResponse.success(foodService.search(q, limit, userId));
+    }
+
+    @GetMapping("/suggestions")
+    @Operation(
+            summary = "음식 검색어 추천",
+            description = "FatSecret autocomplete를 먼저 호출해 검색어 추천을 반환합니다. FatSecret 권한이 없거나 실패하면 DB에 저장된 음식명과 별칭으로 추천어를 반환합니다."
+    )
+    ApiResponse<FoodSuggestionResponse> suggestions(
+            @RequestHeader(value = HttpHeaders.AUTHORIZATION, required = false) String authorization,
+            @RequestParam String q,
+            @RequestParam(defaultValue = "10") int limit
+    ) {
+        Optional<Long> userId = jwtAuthService.optionalUserId(authorization);
+        return ApiResponse.success(foodService.suggestions(q, limit, userId));
     }
 
     @PostMapping("/custom")

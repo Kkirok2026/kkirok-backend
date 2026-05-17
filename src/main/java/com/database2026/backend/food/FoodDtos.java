@@ -17,6 +17,9 @@ public final class FoodDtos {
     public record FoodSearchResponse(List<FoodSummary> items) {
     }
 
+    public record FoodSuggestionResponse(List<String> items) {
+    }
+
     @Schema(description = "검색 결과에 없는 음식을 내 개인 음식으로 직접 등록하는 요청. 입력한 영양값은 amountG에 해당하는 섭취량 기준입니다.")
     public record CustomFoodCreateRequest(
             @NotBlank @Schema(description = "사용자가 입력한 음식명", example = "저지방 우유") String foodName,
@@ -32,6 +35,8 @@ public final class FoodDtos {
 
     public record FoodSummary(
             Long foodId,
+            String sourceName,
+            String sourceFoodCode,
             String foodName,
             String matchedAlias,
             BigDecimal defaultServingG,

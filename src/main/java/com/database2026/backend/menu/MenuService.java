@@ -20,19 +20,27 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 @Service
 public class MenuService {
 
+    private static final Logger log = LoggerFactory.getLogger(MenuService.class);
     private static final String ALLERGY_WARNING_MESSAGE =
             "%s 알레르기 항목이 포함되어 있을 수 있습니다. 섭취 전 원재료를 확인하세요.";
 
     private final JdbcTemplate jdbcTemplate;
+    private final InhaMenuCrawlerService inhaMenuCrawlerService;
+    private final MenuFoodMatcher menuFoodMatcher;
+    private volatile boolean inhaStudentCrawlUnavailable;
 
-    public MenuService(JdbcTemplate jdbcTemplate) {
+    public MenuService(JdbcTemplate jdbcTemplate, InhaMenuCrawlerService inhaMenuCrawlerService, MenuFoodMatcher menuFoodMatcher) {
         this.jdbcTemplate = jdbcTemplate;
+        this.inhaMenuCrawlerService = inhaMenuCrawlerService;
+        this.menuFoodMatcher = menuFoodMatcher;
     }
 
     public UniversityListResponse universities() {
@@ -71,6 +79,8 @@ public class MenuService {
 
     public DailyMenuResponse dailyMenu(long universityId, LocalDate date, String mealType) {
         String mealTypeCode = normalizeMealType(mealType);
+        refreshInhaStudentMenuIfMissing(universityId, date, mealTypeCode);
+        menuFoodMatcher.resolveMissingMenuItems(universityId, date, mealTypeCode);
         List<MenuOptionRow> rows = menuOptionRows(universityId, date, mealTypeCode);
         Map<Long, DiningPlaceAccumulator> grouped = new LinkedHashMap<>();
         for (MenuOptionRow row : rows) {
@@ -100,6 +110,8 @@ public class MenuService {
 
     public MenuCompareResponse compare(long userId, long universityId, LocalDate date, String mealType, Long studentOptionId) {
         String mealTypeCode = normalizeMealType(mealType);
+        refreshInhaStudentMenuIfMissing(universityId, date, mealTypeCode);
+        menuFoodMatcher.resolveMissingMenuItems(universityId, date, mealTypeCode);
         if (studentOptionId != null) {
             assertStudentOptionCanCompare(universityId, date, mealTypeCode, studentOptionId);
         }
@@ -151,27 +163,27 @@ public class MenuService {
                                c.category_name,
                                o.option_name,
                                case when sum(case when mi.food_id is not null then 1 else 0 end) > 0
-                                    then coalesce(sum(case when n.nutrient_code = 'CALORIES_KCAL' then v.amount_per_100g * mi.amount_g / 100 end), 0)
+                                    then coalesce(sum(f.calories_kcal * mi.amount_g / 100), 0)
                                     else coalesce(o.calories_kcal, 0)
                                end as calories_kcal,
                                case when sum(case when mi.food_id is not null then 1 else 0 end) > 0
-                                    then coalesce(sum(case when n.nutrient_code = 'CARB_G' then v.amount_per_100g * mi.amount_g / 100 end), 0)
+                                    then coalesce(sum(f.carb_g * mi.amount_g / 100), 0)
                                     else coalesce(o.carb_g, 0)
                                end as carb_g,
                                case when sum(case when mi.food_id is not null then 1 else 0 end) > 0
-                                    then coalesce(sum(case when n.nutrient_code = 'PROTEIN_G' then v.amount_per_100g * mi.amount_g / 100 end), 0)
+                                    then coalesce(sum(f.protein_g * mi.amount_g / 100), 0)
                                     else coalesce(o.protein_g, 0)
                                end as protein_g,
                                case when sum(case when mi.food_id is not null then 1 else 0 end) > 0
-                                    then coalesce(sum(case when n.nutrient_code = 'FAT_G' then v.amount_per_100g * mi.amount_g / 100 end), 0)
+                                    then coalesce(sum(f.fat_g * mi.amount_g / 100), 0)
                                     else coalesce(o.fat_g, 0)
                                end as fat_g,
                                case when sum(case when mi.food_id is not null then 1 else 0 end) > 0
-                                    then coalesce(sum(case when n.nutrient_code = 'SUGAR_G' then v.amount_per_100g * mi.amount_g / 100 end), 0)
+                                    then coalesce(sum(f.sugar_g * mi.amount_g / 100), 0)
                                     else coalesce(o.sugar_g, 0)
                                end as sugar_g,
                                case when sum(case when mi.food_id is not null then 1 else 0 end) > 0
-                                    then coalesce(sum(case when n.nutrient_code = 'SODIUM_MG' then v.amount_per_100g * mi.amount_g / 100 end), 0)
+                                    then coalesce(sum(f.sodium_mg * mi.amount_g / 100), 0)
                                     else coalesce(o.sodium_mg, 0)
                                end as sodium_mg
                         from cafeteria_menu m
@@ -179,8 +191,7 @@ public class MenuService {
                         join cafeteria_menu_option o on o.menu_id = m.menu_id
                         left join menu_category c on c.category_id = o.category_id
                         left join cafeteria_menu_item mi on mi.option_id = o.option_id
-                        left join food_nutrient_value v on v.food_id = mi.food_id
-                        left join nutrient n on n.nutrient_id = v.nutrient_id
+                        left join food f on f.food_id = mi.food_id
                         where dp.university_id = ?
                           and m.served_date = ?
                           and m.meal_type = ?
@@ -219,6 +230,62 @@ public class MenuService {
                 date,
                 mealTypeCode
         );
+    }
+
+    private void refreshInhaStudentMenuIfMissing(long universityId, LocalDate date, String mealTypeCode) {
+        if (inhaStudentCrawlUnavailable || !isInhaUniversity(universityId) || hasStudentMenu(universityId, date, mealTypeCode)) {
+            return;
+        }
+
+        try {
+            inhaMenuCrawlerService.crawlStudentDining(date);
+        } catch (DomainException exception) {
+            if ("INHA_MENU_REQUIRES_AUTH".equals(exception.code())
+                    || "INHA_MENU_FETCH_FAILED".equals(exception.code())
+                    || "INHA_MENU_FETCH_INTERRUPTED".equals(exception.code())
+                    || "INHA_MENU_NOT_FOUND".equals(exception.code())) {
+                inhaStudentCrawlUnavailable = true;
+                return;
+            }
+            throw exception;
+        } catch (RuntimeException exception) {
+            inhaStudentCrawlUnavailable = true;
+            log.warn("인하대 학생식당 메뉴 자동 크롤링 실패. 기존 메뉴 데이터만 반환합니다.", exception);
+        }
+    }
+
+    private boolean isInhaUniversity(long universityId) {
+        Integer count = jdbcTemplate.queryForObject("""
+                        select count(*)
+                        from universities
+                        where university_id = ?
+                          and university_name = '인하대학교'
+                        """,
+                Integer.class,
+                universityId
+        );
+        return count != null && count > 0;
+    }
+
+    private boolean hasStudentMenu(long universityId, LocalDate date, String mealTypeCode) {
+        Integer count = jdbcTemplate.queryForObject("""
+                        select count(*)
+                        from cafeteria_menu_option o
+                        join cafeteria_menu m on m.menu_id = o.menu_id
+                        join dining_place dp on dp.dining_place_id = m.dining_place_id
+                        where dp.university_id = ?
+                          and dp.dining_place_type = 'STUDENT'
+                          and dp.is_active = true
+                          and o.is_available = true
+                          and m.served_date = ?
+                          and m.meal_type = ?
+                        """,
+                Integer.class,
+                universityId,
+                date,
+                mealTypeCode
+        );
+        return count != null && count > 0;
     }
 
     private void assertStudentOptionCanCompare(long universityId, LocalDate date, String mealTypeCode, long studentOptionId) {

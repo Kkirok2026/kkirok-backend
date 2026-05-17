@@ -3,15 +3,20 @@ package com.database2026.backend.menu;
 import com.database2026.backend.common.DomainException;
 import com.database2026.backend.menu.MenuDtos.InhaMenuCrawlResponse;
 import java.io.IOException;
-import java.math.BigDecimal;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.DayOfWeek;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.Year;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -19,6 +24,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -27,25 +33,52 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class InhaMenuCrawlerService {
 
-    private static final URI INHA_STUDENT_MENU_URI = URI.create("https://www.inha.ac.kr/kr/1072/subview.do");
+    private static final URI INHA_STUDENT_MENU_PAGE_URI = URI.create("https://www.inha.ac.kr/kr/1072/subview.do");
+    private static final URI INHA_STUDENT_MENU_URI = URI.create("https://www.inha.ac.kr/diet/kr/2/view.do");
+    private static final DateTimeFormatter INHA_MENU_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy.MM.dd");
+    private static final Pattern DAY_HEADING_PATTERN = Pattern.compile("(?is)<h2\\b[^>]*class=\"[^\"]*objHeading_h2[^\"]*\"[^>]*>(.*?)</h2>");
+    private static final Pattern MEAL_HEADING_PATTERN = Pattern.compile("(?is)<h3\\b[^>]*>(.*?)</h3>");
     private static final Pattern TABLE_ROW_PATTERN = Pattern.compile("(?is)<tr\\b[^>]*>(.*?)</tr>");
     private static final Pattern TABLE_CELL_PATTERN = Pattern.compile("(?is)<t[dh]\\b[^>]*>(.*?)</t[dh]>");
+    private static final Pattern WEEK_MONDAY_PATTERN = Pattern.compile("name=[\"']monday[\"'][^>]*value=[\"'](\\d{4})\\.(\\d{1,2})\\.(\\d{1,2})[\"']");
     private static final Pattern DATE_PATTERN = Pattern.compile("(\\d{1,2})/(\\d{1,2})");
+    private static final Pattern DAY_HEADING_DATE_PATTERN = Pattern.compile("(\\d{1,2})\\.(\\d{1,2})\\.");
     private static final Pattern KCAL_PATTERN = Pattern.compile("(\\d{2,4})\\s*[kK][cC][aA][lL]");
+    private static final Pattern FIRST_NUMBER_PATTERN = Pattern.compile("\\d+");
 
     private final JdbcTemplate jdbcTemplate;
+    private final MenuFoodMatcher menuFoodMatcher;
     private final HttpClient httpClient;
+    private final String inhaMenuCookie;
+    private final String inhaMenuLayout;
+    private final Duration timeout;
 
-    public InhaMenuCrawlerService(JdbcTemplate jdbcTemplate) {
+    public InhaMenuCrawlerService(
+            JdbcTemplate jdbcTemplate,
+            MenuFoodMatcher menuFoodMatcher,
+            @Value("${inha.menu.cookie:}") String inhaMenuCookie,
+            @Value("${inha.menu.layout:J3sRfz6SuHMYDlWbLXHbgQ==}") String inhaMenuLayout,
+            @Value("${inha.menu.timeout-ms:5000}") long timeoutMs
+    ) {
         this.jdbcTemplate = jdbcTemplate;
+        this.menuFoodMatcher = menuFoodMatcher;
+        this.inhaMenuCookie = inhaMenuCookie == null ? "" : inhaMenuCookie.trim();
+        this.inhaMenuLayout = inhaMenuLayout == null ? "" : inhaMenuLayout.trim();
+        this.timeout = Duration.ofMillis(timeoutMs);
         this.httpClient = HttpClient.newBuilder()
+                .connectTimeout(this.timeout)
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .build();
     }
 
     @Transactional
     public InhaMenuCrawlResponse crawlStudentDining() {
-        String html = fetch(INHA_STUDENT_MENU_URI);
+        return crawlStudentDining(LocalDate.now());
+    }
+
+    @Transactional
+    public InhaMenuCrawlResponse crawlStudentDining(LocalDate targetDate) {
+        String html = fetch(targetDate);
         if (requiresSso(html)) {
             throw DomainException.unauthorized(
                     "INHA_MENU_REQUIRES_AUTH",
@@ -67,12 +100,12 @@ public class InhaMenuCrawlerService {
             long menuId = upsertMenu(diningPlaceId, menu);
             long optionId = upsertMenuOption(menuId, menu);
             jdbcTemplate.update("delete from cafeteria_menu_item where option_id = ?", optionId);
-            for (String rawItemName : splitMenuItems(menu.optionName())) {
-                Long foodId = matchedFoodId(rawItemName);
+            for (String rawItemName : menuFoodMatcher.splitMenuItems(menu.optionName())) {
+                Long foodId = menuFoodMatcher.matchedFoodId(rawItemName);
                 jdbcTemplate.update("""
                         insert into cafeteria_menu_item (option_id, food_id, raw_item_name, amount_g)
                         values (?, ?, ?, ?)
-                        """, optionId, foodId, rawItemName, BigDecimal.valueOf(100));
+                        """, optionId, foodId, rawItemName, menuFoodMatcher.servingAmount(foodId));
             }
             importedCount++;
         }
@@ -80,12 +113,22 @@ public class InhaMenuCrawlerService {
         return new InhaMenuCrawlResponse(importedCount, List.of());
     }
 
-    private String fetch(URI uri) {
-        HttpRequest request = HttpRequest.newBuilder(uri)
-                .GET()
+    private String fetch(LocalDate targetDate) {
+        String body = formBody(targetDate);
+        return send(HttpRequest.newBuilder(INHA_STUDENT_MENU_URI)
+                .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
+                .timeout(timeout)
                 .header("User-Agent", "Mozilla/5.0")
                 .header("Accept", "text/html,application/xhtml+xml")
-                .build();
+                .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+                .header("Referer", INHA_STUDENT_MENU_PAGE_URI.toString()));
+    }
+
+    private String send(HttpRequest.Builder requestBuilder) {
+        if (!inhaMenuCookie.isBlank()) {
+            requestBuilder.header("Cookie", inhaMenuCookie);
+        }
+        HttpRequest request = requestBuilder.build();
         try {
             HttpResponse<byte[]> response = httpClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
             if (response.statusCode() >= 400) {
@@ -104,6 +147,17 @@ public class InhaMenuCrawlerService {
         }
     }
 
+    private String formBody(LocalDate targetDate) {
+        LocalDate monday = targetDate.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+        return "layout=" + encode(inhaMenuLayout)
+                + "&monday=" + encode(INHA_MENU_DATE_FORMAT.format(monday))
+                + "&week=";
+    }
+
+    private String encode(String value) {
+        return URLEncoder.encode(value, StandardCharsets.UTF_8);
+    }
+
     private boolean requiresSso(String html) {
         String normalized = html.toLowerCase(Locale.ROOT);
         return normalized.contains("/sso/ssologin.do")
@@ -112,6 +166,11 @@ public class InhaMenuCrawlerService {
     }
 
     private List<CrawledMenu> parseMenus(String html) {
+        List<CrawledMenu> dietViewMenus = parseDietViewMenus(html);
+        if (!dietViewMenus.isEmpty()) {
+            return dietViewMenus;
+        }
+
         List<List<String>> rows = tableRows(html);
         Map<Integer, LocalDate> dateColumns = new LinkedHashMap<>();
         String currentMealType = null;
@@ -153,11 +212,126 @@ public class InhaMenuCrawlerService {
                         optionName,
                         categoryCode,
                         categoryLabel,
-                        calories(raw).orElse(null)
+                        calories(raw).orElse(null),
+                        null
                 ));
             }
         }
         return menus;
+    }
+
+    private List<CrawledMenu> parseDietViewMenus(String html) {
+        List<HeadingBlock> blocks = headingBlocks(html);
+        if (blocks.isEmpty()) {
+            return List.of();
+        }
+
+        LocalDate baseMonday = baseMonday(html);
+        List<CrawledMenu> menus = new ArrayList<>();
+        for (HeadingBlock block : blocks) {
+            LocalDate servedDate = dateFromHeading(block.heading(), baseMonday).orElse(null);
+            String mealHeading = mealHeading(block.html()).orElse("");
+            Optional<String> mealType = mealType(mealHeading);
+            if (servedDate == null || mealType.isEmpty()) {
+                continue;
+            }
+
+            for (List<String> rawCells : rawTableRows(block.html())) {
+                if (rawCells.size() < 3) {
+                    continue;
+                }
+
+                String categoryLabel = cellText(rawCells.get(0));
+                String optionName = optionNameFromMenuCell(rawCells.get(1));
+                Integer price = price(cellText(rawCells.get(2))).orElse(null);
+                if (categoryLabel.isBlank()
+                        || "구분".equals(categoryLabel)
+                        || optionName.isBlank()
+                        || "메뉴".equals(optionName)) {
+                    continue;
+                }
+
+                menus.add(new CrawledMenu(
+                        servedDate,
+                        mealType.get(),
+                        optionName,
+                        categoryCode(categoryLabel, mealType.get()),
+                        categoryLabel,
+                        null,
+                        price
+                ));
+            }
+        }
+        return menus;
+    }
+
+    private List<HeadingBlock> headingBlocks(String html) {
+        Matcher matcher = DAY_HEADING_PATTERN.matcher(html);
+        List<HeadingMatch> headings = new ArrayList<>();
+        while (matcher.find()) {
+            headings.add(new HeadingMatch(cellText(matcher.group(1)), matcher.end(), matcher.start()));
+        }
+        if (headings.isEmpty()) {
+            return List.of();
+        }
+
+        List<HeadingBlock> blocks = new ArrayList<>();
+        for (int i = 0; i < headings.size(); i++) {
+            HeadingMatch heading = headings.get(i);
+            int blockEnd = i + 1 < headings.size() ? headings.get(i + 1).start() : html.length();
+            blocks.add(new HeadingBlock(heading.text(), html.substring(heading.end(), blockEnd)));
+        }
+        return blocks;
+    }
+
+    private Optional<String> mealHeading(String blockHtml) {
+        Matcher matcher = MEAL_HEADING_PATTERN.matcher(blockHtml);
+        return matcher.find() ? Optional.of(cellText(matcher.group(1))) : Optional.empty();
+    }
+
+    private List<List<String>> rawTableRows(String html) {
+        List<List<String>> rows = new ArrayList<>();
+        Matcher rowMatcher = TABLE_ROW_PATTERN.matcher(html);
+        while (rowMatcher.find()) {
+            List<String> cells = new ArrayList<>();
+            Matcher cellMatcher = TABLE_CELL_PATTERN.matcher(rowMatcher.group(1));
+            while (cellMatcher.find()) {
+                cells.add(cellMatcher.group(1));
+            }
+            if (!cells.isEmpty()) {
+                rows.add(cells);
+            }
+        }
+        return rows;
+    }
+
+    private LocalDate baseMonday(String html) {
+        Matcher matcher = WEEK_MONDAY_PATTERN.matcher(html);
+        if (matcher.find()) {
+            return LocalDate.of(
+                    Integer.parseInt(matcher.group(1)),
+                    Integer.parseInt(matcher.group(2)),
+                    Integer.parseInt(matcher.group(3))
+            );
+        }
+        return LocalDate.now().with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+    }
+
+    private Optional<LocalDate> dateFromHeading(String heading, LocalDate baseMonday) {
+        Matcher matcher = DAY_HEADING_DATE_PATTERN.matcher(heading);
+        if (!matcher.find()) {
+            return Optional.empty();
+        }
+
+        int month = Integer.parseInt(matcher.group(1));
+        int day = Integer.parseInt(matcher.group(2));
+        LocalDate date = LocalDate.of(baseMonday.getYear(), month, day);
+        if (date.isBefore(baseMonday.minusDays(3))) {
+            date = date.plusYears(1);
+        } else if (date.isAfter(baseMonday.plusDays(10))) {
+            date = date.minusYears(1);
+        }
+        return Optional.of(date);
     }
 
     private List<List<String>> tableRows(String html) {
@@ -198,6 +372,9 @@ public class InhaMenuCrawlerService {
             return Optional.of("BREAKFAST");
         }
         if (text.contains("점심") || text.contains("중식")) {
+            return Optional.of("LUNCH");
+        }
+        if (text.contains("셀프라면")) {
             return Optional.of("LUNCH");
         }
         if (text.contains("저녁") || text.contains("석식")) {
@@ -261,6 +438,9 @@ public class InhaMenuCrawlerService {
         if ("DINNER".equals(mealType)) {
             return "STUDENT_DINNER";
         }
+        if ("BREAKFAST".equals(mealType)) {
+            return "STUDENT_CRAWLED";
+        }
         String normalized = normalizeCategoryText(categoryLabel);
         if (normalized.contains("한상한담")) {
             return "STUDENT_HANSANG";
@@ -302,6 +482,37 @@ public class InhaMenuCrawlerService {
             return normalized.substring(0, 255);
         }
         return normalized;
+    }
+
+    private String optionNameFromMenuCell(String html) {
+        String menu = String.join(" / ", cellLines(html));
+        return optionName(menu);
+    }
+
+    private List<String> cellLines(String html) {
+        String text = html
+                .replaceAll("(?i)<br\\s*/?>", "\n")
+                .replaceAll("(?is)<script\\b[^>]*>.*?</script>", "")
+                .replaceAll("(?is)<style\\b[^>]*>.*?</style>", "")
+                .replaceAll("(?is)<[^>]+>", " ")
+                .replace("&nbsp;", " ")
+                .replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replaceAll("[ \\t\\x0B\\f\\r]+", " ");
+        return Arrays.stream(text.split("\\n+"))
+                .map(String::trim)
+                .filter(line -> !line.isBlank())
+                .toList();
+    }
+
+    private Optional<Integer> price(String text) {
+        Matcher matcher = FIRST_NUMBER_PATTERN.matcher(text.replace(",", ""));
+        if (matcher.find()) {
+            return Optional.of(Integer.parseInt(matcher.group()));
+        }
+        return Optional.empty();
     }
 
     private Optional<Integer> calories(String text) {
@@ -364,12 +575,14 @@ public class InhaMenuCrawlerService {
     private long upsertMenuOption(long menuId, CrawledMenu menu) {
         Long categoryId = categoryId(menu.categoryCode());
         jdbcTemplate.update("""
-                insert into cafeteria_menu_option (menu_id, category_id, option_name, source_label, is_available)
-                values (?, ?, ?, ?, true)
+                insert into cafeteria_menu_option (menu_id, category_id, option_name, source_label, price, is_available, calories_kcal)
+                values (?, ?, ?, ?, ?, true, ?)
                 on duplicate key update category_id = values(category_id),
                                         source_label = values(source_label),
-                                        is_available = true
-                """, menuId, categoryId, menu.optionName(), menu.categoryLabel());
+                                        price = values(price),
+                                        is_available = true,
+                                        calories_kcal = values(calories_kcal)
+                """, menuId, categoryId, menu.optionName(), menu.categoryLabel(), menu.price(), menu.caloriesKcal());
         return jdbcTemplate.query("""
                         select option_id
                         from cafeteria_menu_option
@@ -380,58 +593,6 @@ public class InhaMenuCrawlerService {
                 menuId,
                 menu.optionName()
         ).getFirst();
-    }
-
-    private List<String> splitMenuItems(String optionName) {
-        List<String> items = Pattern.compile("\\s*(/|\\n|,)\\s*")
-                .splitAsStream(optionName)
-                .map(String::trim)
-                .filter(item -> !item.isBlank())
-                .toList();
-        return items.isEmpty() ? List.of(optionName) : items;
-    }
-
-    private Long matchedFoodId(String rawItemName) {
-        for (String candidate : foodMatchCandidates(rawItemName)) {
-            Optional<Long> foodId = jdbcTemplate.query("""
-                            select f.food_id
-                            from food f
-                            where f.source_name = 'MFDS_INTEGRATED'
-                              and lower(f.food_name) = lower(?)
-                            union
-                            select a.food_id
-                            from food_alias a
-                            join food f on f.food_id = a.food_id
-                            where f.source_name = 'MFDS_INTEGRATED'
-                              and lower(a.normalized_alias) = lower(?)
-                            limit 1
-                            """,
-                    (rs, rowNum) -> rs.getLong("food_id"),
-                    candidate,
-                    candidate
-            ).stream().findFirst();
-            if (foodId.isPresent()) {
-                return foodId.get();
-            }
-        }
-        return null;
-    }
-
-    private List<String> foodMatchCandidates(String rawItemName) {
-        String cleaned = rawItemName
-                .replaceAll("\\([^)]*\\)", "")
-                .replaceAll("^[가-힣A-Za-z0-9]+\\)", "")
-                .trim();
-        if (cleaned.isBlank()) {
-            return List.of(rawItemName);
-        }
-        if (cleaned.contains("*")) {
-            String primary = cleaned.substring(0, cleaned.indexOf('*')).trim();
-            if (!primary.isBlank() && !primary.equals(cleaned)) {
-                return List.of(cleaned, primary);
-            }
-        }
-        return List.of(cleaned);
     }
 
     private Long categoryId(String categoryCode) {
@@ -451,7 +612,17 @@ public class InhaMenuCrawlerService {
             String optionName,
             String categoryCode,
             String categoryLabel,
-            Integer caloriesKcal
+            Integer caloriesKcal,
+            Integer price
+    ) {
+    }
+
+    private record HeadingMatch(String text, int end, int start) {
+    }
+
+    private record HeadingBlock(
+            String heading,
+            String html
     ) {
     }
 }

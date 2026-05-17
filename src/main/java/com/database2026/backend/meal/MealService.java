@@ -196,6 +196,7 @@ public class MealService {
                         where food_id = ?
                           and (
                               source_name = 'MFDS_INTEGRATED'
+                              or source_name = 'FATSECRET'
                               or (
                                   source_name = 'USER_CUSTOM'
                                   and exists (
@@ -317,46 +318,33 @@ public class MealService {
                                i.amount_g,
                                i.is_excluded,
                                case when i.food_id is not null
-                                    then coalesce(sum(case when n.nutrient_code = 'CALORIES_KCAL' then v.amount_per_100g * i.amount_g / 100 end), 0)
+                                    then coalesce(f.calories_kcal * i.amount_g / 100, 0)
                                     else coalesce(o.calories_kcal * i.amount_g / 100, 0)
                                end as calories_kcal,
                                case when i.food_id is not null
-                                    then coalesce(sum(case when n.nutrient_code = 'CARB_G' then v.amount_per_100g * i.amount_g / 100 end), 0)
+                                    then coalesce(f.carb_g * i.amount_g / 100, 0)
                                     else coalesce(o.carb_g * i.amount_g / 100, 0)
                                end as carb_g,
                                case when i.food_id is not null
-                                    then coalesce(sum(case when n.nutrient_code = 'PROTEIN_G' then v.amount_per_100g * i.amount_g / 100 end), 0)
+                                    then coalesce(f.protein_g * i.amount_g / 100, 0)
                                     else coalesce(o.protein_g * i.amount_g / 100, 0)
                                end as protein_g,
                                case when i.food_id is not null
-                                    then coalesce(sum(case when n.nutrient_code = 'FAT_G' then v.amount_per_100g * i.amount_g / 100 end), 0)
+                                    then coalesce(f.fat_g * i.amount_g / 100, 0)
                                     else coalesce(o.fat_g * i.amount_g / 100, 0)
                                end as fat_g,
                                case when i.food_id is not null
-                                    then coalesce(sum(case when n.nutrient_code = 'SUGAR_G' then v.amount_per_100g * i.amount_g / 100 end), 0)
+                                    then coalesce(f.sugar_g * i.amount_g / 100, 0)
                                     else coalesce(o.sugar_g * i.amount_g / 100, 0)
                                end as sugar_g,
                                case when i.food_id is not null
-                                    then coalesce(sum(case when n.nutrient_code = 'SODIUM_MG' then v.amount_per_100g * i.amount_g / 100 end), 0)
+                                    then coalesce(f.sodium_mg * i.amount_g / 100, 0)
                                     else coalesce(o.sodium_mg * i.amount_g / 100, 0)
                                end as sodium_mg
                         from meal_log_item i
                         left join cafeteria_menu_option o on o.option_id = i.source_menu_option_id
-                        left join food_nutrient_value v on v.food_id = i.food_id
-                        left join nutrient n on n.nutrient_id = v.nutrient_id
+                        left join food f on f.food_id = i.food_id
                         where i.meal_log_id = ?
-                        group by i.meal_log_item_id,
-                                 i.food_id,
-                                 i.source_menu_option_id,
-                                 i.item_name_snapshot,
-                                 i.amount_g,
-                                 i.is_excluded,
-                                 o.calories_kcal,
-                                 o.carb_g,
-                                 o.protein_g,
-                                 o.fat_g,
-                                 o.sugar_g,
-                                 o.sodium_mg
                         order by i.meal_log_item_id
                         """,
                 (rs, rowNum) -> {
@@ -520,38 +508,37 @@ public class MealService {
         return jdbcTemplate.query("""
                         select coalesce(sum(case
                                    when i.food_id is null and i.source_menu_option_id is not null then o.calories_kcal * i.amount_g / 100
-                                   when n.nutrient_code = 'CALORIES_KCAL' then v.amount_per_100g * i.amount_g / 100
+                                   when i.food_id is not null then f.calories_kcal * i.amount_g / 100
                                    else 0
                                end), 0) as calories_kcal,
                                coalesce(sum(case
                                    when i.food_id is null and i.source_menu_option_id is not null then o.carb_g * i.amount_g / 100
-                                   when n.nutrient_code = 'CARB_G' then v.amount_per_100g * i.amount_g / 100
+                                   when i.food_id is not null then f.carb_g * i.amount_g / 100
                                    else 0
                                end), 0) as carb_g,
                                coalesce(sum(case
                                    when i.food_id is null and i.source_menu_option_id is not null then o.protein_g * i.amount_g / 100
-                                   when n.nutrient_code = 'PROTEIN_G' then v.amount_per_100g * i.amount_g / 100
+                                   when i.food_id is not null then f.protein_g * i.amount_g / 100
                                    else 0
                                end), 0) as protein_g,
                                coalesce(sum(case
                                    when i.food_id is null and i.source_menu_option_id is not null then o.fat_g * i.amount_g / 100
-                                   when n.nutrient_code = 'FAT_G' then v.amount_per_100g * i.amount_g / 100
+                                   when i.food_id is not null then f.fat_g * i.amount_g / 100
                                    else 0
                                end), 0) as fat_g,
                                coalesce(sum(case
                                    when i.food_id is null and i.source_menu_option_id is not null then o.sugar_g * i.amount_g / 100
-                                   when n.nutrient_code = 'SUGAR_G' then v.amount_per_100g * i.amount_g / 100
+                                   when i.food_id is not null then f.sugar_g * i.amount_g / 100
                                    else 0
                                end), 0) as sugar_g,
                                coalesce(sum(case
                                    when i.food_id is null and i.source_menu_option_id is not null then o.sodium_mg * i.amount_g / 100
-                                   when n.nutrient_code = 'SODIUM_MG' then v.amount_per_100g * i.amount_g / 100
+                                   when i.food_id is not null then f.sodium_mg * i.amount_g / 100
                                    else 0
                                end), 0) as sodium_mg
                         from meal_log_item i
                         left join cafeteria_menu_option o on o.option_id = i.source_menu_option_id
-                        left join food_nutrient_value v on v.food_id = i.food_id
-                        left join nutrient n on n.nutrient_id = v.nutrient_id
+                        left join food f on f.food_id = i.food_id
                         where i.meal_log_id = ?
                           and i.is_excluded = false
                         """,
@@ -564,39 +551,38 @@ public class MealService {
         return jdbcTemplate.query("""
                         select coalesce(sum(case
                                    when i.food_id is null and i.source_menu_option_id is not null then o.calories_kcal * i.amount_g / 100
-                                   when n.nutrient_code = 'CALORIES_KCAL' then v.amount_per_100g * i.amount_g / 100
+                                   when i.food_id is not null then f.calories_kcal * i.amount_g / 100
                                    else 0
                                end), 0) as calories_kcal,
                                coalesce(sum(case
                                    when i.food_id is null and i.source_menu_option_id is not null then o.carb_g * i.amount_g / 100
-                                   when n.nutrient_code = 'CARB_G' then v.amount_per_100g * i.amount_g / 100
+                                   when i.food_id is not null then f.carb_g * i.amount_g / 100
                                    else 0
                                end), 0) as carb_g,
                                coalesce(sum(case
                                    when i.food_id is null and i.source_menu_option_id is not null then o.protein_g * i.amount_g / 100
-                                   when n.nutrient_code = 'PROTEIN_G' then v.amount_per_100g * i.amount_g / 100
+                                   when i.food_id is not null then f.protein_g * i.amount_g / 100
                                    else 0
                                end), 0) as protein_g,
                                coalesce(sum(case
                                    when i.food_id is null and i.source_menu_option_id is not null then o.fat_g * i.amount_g / 100
-                                   when n.nutrient_code = 'FAT_G' then v.amount_per_100g * i.amount_g / 100
+                                   when i.food_id is not null then f.fat_g * i.amount_g / 100
                                    else 0
                                end), 0) as fat_g,
                                coalesce(sum(case
                                    when i.food_id is null and i.source_menu_option_id is not null then o.sugar_g * i.amount_g / 100
-                                   when n.nutrient_code = 'SUGAR_G' then v.amount_per_100g * i.amount_g / 100
+                                   when i.food_id is not null then f.sugar_g * i.amount_g / 100
                                    else 0
                                end), 0) as sugar_g,
                                coalesce(sum(case
                                    when i.food_id is null and i.source_menu_option_id is not null then o.sodium_mg * i.amount_g / 100
-                                   when n.nutrient_code = 'SODIUM_MG' then v.amount_per_100g * i.amount_g / 100
+                                   when i.food_id is not null then f.sodium_mg * i.amount_g / 100
                                    else 0
                                end), 0) as sodium_mg
                         from meal_log d
                         join meal_log_item i on i.meal_log_id = d.meal_log_id
                         left join cafeteria_menu_option o on o.option_id = i.source_menu_option_id
-                        left join food_nutrient_value v on v.food_id = i.food_id
-                        left join nutrient n on n.nutrient_id = v.nutrient_id
+                        left join food f on f.food_id = i.food_id
                         where d.user_id = ?
                           and d.log_date = ?
                           and i.is_excluded = false

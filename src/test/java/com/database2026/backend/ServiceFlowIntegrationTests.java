@@ -176,6 +176,29 @@ class ServiceFlowIntegrationTests {
         assertThat(response.at("/error/code").asText()).isEqualTo("SCHOOL_EMAIL_USER_REQUIRED");
     }
 
+    @Test
+    void foodSearchDeduplicatesByNameAndKeepsFatSecretFirst() throws Exception {
+        seedDuplicateFoodsFromDifferentSources();
+
+        JsonNode response = getOkWithParams("/api/v1/foods/search", null, "q", "테스트중복음식", "limit", "10");
+
+        JsonNode items = response.at("/data/items");
+        assertThat(items.size()).isEqualTo(1);
+        assertThat(items.get(0).at("/sourceName").asText()).isEqualTo("FATSECRET");
+        assertThat(items.get(0).at("/foodName").asText()).isEqualTo("테스트중복음식");
+    }
+
+    @Test
+    void foodSuggestionsUseLocalFallbackAndDeduplicateByName() throws Exception {
+        seedDuplicateFoodsFromDifferentSources();
+
+        JsonNode response = getOkWithParams("/api/v1/foods/suggestions", null, "q", "테스트중복음식", "limit", "10");
+
+        JsonNode items = response.at("/data/items");
+        assertThat(items.size()).isEqualTo(1);
+        assertThat(items.get(0).asText()).isEqualTo("테스트중복음식");
+    }
+
     private void seedStudentMenuOptionForComparison() {
         jdbcTemplate.update("delete from cafeteria_menu_item where option_id = ?", TEST_STUDENT_OPTION_ID);
         jdbcTemplate.update("delete from cafeteria_menu_option where option_id = ?", TEST_STUDENT_OPTION_ID);
@@ -192,6 +215,28 @@ class ServiceFlowIntegrationTests {
                 insert into cafeteria_menu_item (option_id, food_id, raw_item_name, amount_g)
                 values (?, 3101, '라면', 550.00)
                 """, TEST_STUDENT_OPTION_ID);
+    }
+
+    private void seedDuplicateFoodsFromDifferentSources() {
+        jdbcTemplate.update("delete from food_alias where food_id in (select food_id from food where source_food_code in (?, ?))",
+                "TEST-DUP-FATSECRET", "TEST-DUP-MFDS");
+        jdbcTemplate.update("delete from food where source_food_code in (?, ?)", "TEST-DUP-FATSECRET", "TEST-DUP-MFDS");
+        jdbcTemplate.update("""
+                insert into food (
+                    source_name, source_food_code, food_name, default_serving_g, source_category,
+                    calories_kcal, carb_g, protein_g, fat_g, sugar_g, sodium_mg
+                )
+                values ('FATSECRET', 'TEST-DUP-FATSECRET', '테스트중복음식', 100.00, 'test',
+                        100.00, 10.00, 20.00, 30.00, 0.00, 0.00)
+                """);
+        jdbcTemplate.update("""
+                insert into food (
+                    source_name, source_food_code, food_name, default_serving_g, source_category,
+                    calories_kcal, carb_g, protein_g, fat_g, sugar_g, sodium_mg
+                )
+                values ('MFDS_INTEGRATED', 'TEST-DUP-MFDS', '테스트 중복 음식', 100.00, 'test',
+                        200.00, 20.00, 30.00, 40.00, 0.00, 0.00)
+                """);
     }
 
     private String login(String email, String password) throws Exception {

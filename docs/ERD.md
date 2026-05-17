@@ -36,14 +36,11 @@ erDiagram
     CAFETERIA_MENU_OPTION ||--o{ MEAL_LOG_ITEM : source_menu
 
     FOOD ||--o{ FOOD_ALIAS : has
-    FOOD ||--o{ FOOD_NUTRIENT_VALUE : measured_as
     FOOD ||--o{ CAFETERIA_MENU_ITEM : mapped_to
     FOOD ||--o{ MEAL_LOG_ITEM : logged_as
     FOOD ||--o{ USER_CUSTOM_FOOD : custom_master
     FOOD ||--o{ USER_ALLERGY : allergy_food_target
     FOOD ||--o{ FOOD_INGREDIENT : made_of
-
-    NUTRIENT ||--o{ FOOD_NUTRIENT_VALUE : defines
 
     MEAL_LOG ||--o{ MEAL_LOG_ITEM : contains
 
@@ -149,6 +146,12 @@ erDiagram
         varchar food_name
         decimal default_serving_g
         varchar source_category
+        decimal calories_kcal
+        decimal carb_g
+        decimal protein_g
+        decimal fat_g
+        decimal sugar_g
+        decimal sodium_mg
     }
 
     FOOD_ALIAS {
@@ -158,20 +161,6 @@ erDiagram
         varchar normalized_alias
         varchar alias_type
         int priority
-    }
-
-    NUTRIENT {
-        bigint nutrient_id PK
-        varchar nutrient_code UK
-        varchar nutrient_name
-        varchar unit
-        int sort_order
-    }
-
-    FOOD_NUTRIENT_VALUE {
-        bigint food_id PK,FK
-        bigint nutrient_id PK,FK
-        decimal amount_per_100g
     }
 
     USER_CUSTOM_FOOD {
@@ -253,5 +242,5 @@ erDiagram
 - `meal_log`는 `(user_id, meal_type, log_date)` 유니크라 하루 한 끼 기록을 하나로 모은다.
 - `food_alias`는 `(food_id, normalized_alias)` 유니크다.
 - `user_custom_food`는 `(user_id, normalized_food_name)` 유니크라 같은 사용자가 같은 직접 등록 음식을 중복 저장하지 않는다.
-- `food_nutrient_value`는 `(food_id, nutrient_id)` 복합 PK로 영양소별 값을 관리한다.
+- `food`는 100g 기준 영양값(`calories_kcal`, `carb_g`, `protein_g`, `fat_g`, `sugar_g`, `sodium_mg`)을 직접 가진다.
 - `user_allergy`는 `(user_id, allergy_type, normalized_allergy_name)` 유니크라 같은 타입의 알레르기를 중복 등록하지 않는다.
