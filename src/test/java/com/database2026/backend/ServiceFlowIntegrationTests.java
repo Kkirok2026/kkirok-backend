@@ -55,10 +55,14 @@ class ServiceFlowIntegrationTests {
                   "heightCm": 164,
                   "weightKg": 58,
                   "targetWeightKg": 55,
+                  "targetPeriodValue": 3,
+                  "targetPeriodUnit": "MONTH",
                   "activityLevel": "LOW_ACTIVE"
                 }
                 """);
         assertThat(profile.at("/data/bmi").decimalValue()).isGreaterThan(BigDecimal.ZERO);
+        assertThat(profile.at("/data/targetPeriodValue").asInt()).isEqualTo(3);
+        assertThat(profile.at("/data/targetPeriodUnit").asText()).isEqualTo("MONTH");
 
         JsonNode foodSearch = getOkWithParams("/api/v1/foods/search", token, "q", "라 면", "limit", "5");
         assertThat(foodSearch.at("/data/items").size()).isGreaterThan(0);
@@ -173,17 +177,22 @@ class ServiceFlowIntegrationTests {
     }
 
     private void seedStudentMenuOptionForComparison() {
+        Long menuId = jdbcTemplate.query("""
+                        select m.menu_id
+                        from cafeteria_menu m
+                        where m.dining_place_id = 3
+                          and m.meal_type = 'LUNCH'
+                          and m.served_date = ?
+                        """,
+                (rs, rowNum) -> rs.getLong("menu_id"),
+                LocalDate.of(2026, 5, 13)
+        ).getFirst();
         jdbcTemplate.update("delete from cafeteria_menu_item where option_id = ?", TEST_STUDENT_OPTION_ID);
         jdbcTemplate.update("delete from cafeteria_menu_option where option_id = ?", TEST_STUDENT_OPTION_ID);
-        jdbcTemplate.update("delete from cafeteria_menu where menu_id = ?", TEST_STUDENT_MENU_ID);
-        jdbcTemplate.update("""
-                insert into cafeteria_menu (menu_id, dining_place_id, meal_type, served_date)
-                values (?, 3, 'LUNCH', ?)
-                """, TEST_STUDENT_MENU_ID, LocalDate.of(2026, 5, 13));
         jdbcTemplate.update("""
                 insert into cafeteria_menu_option (option_id, menu_id, category_id, option_name, source_label)
                 values (?, ?, 16, '테스트 학생식당 라면', '통합 테스트 학생식당')
-                """, TEST_STUDENT_OPTION_ID, TEST_STUDENT_MENU_ID);
+                """, TEST_STUDENT_OPTION_ID, menuId);
         jdbcTemplate.update("""
                 insert into cafeteria_menu_item (option_id, food_id, raw_item_name, amount_g)
                 values (?, 3101, '라면', 550.00)

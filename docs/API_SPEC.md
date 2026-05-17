@@ -135,14 +135,16 @@
 
 `PUT /users/me/profile`
 
-회원가입 후 키/현재 몸무게/목표 몸무게/성별을 처음 입력하거나 수정하고 BMI를 다시 계산한다. 알레르기 정보는 같은 건강 프로필 영역에서 알레르기 API로 등록한다. `targetWeightKg`는 선택 값이며, 보내지 않거나 `null`로 보내면 목표 몸무게를 설정하지 않은 상태로 저장된다.
+회원가입 후 키/현재 몸무게/목표 몸무게/목표 기간/성별을 처음 입력하거나 수정하고 BMI를 다시 계산한다. 알레르기 정보는 같은 건강 프로필 영역에서 알레르기 API로 등록한다. `targetWeightKg`, `targetPeriodValue`, `targetPeriodUnit`은 선택 값이다. 목표 기간 값이 있고 단위를 생략하면 `MONTH`로 저장된다.
 
 ```json
 {
   "gender": "FEMALE",
   "heightCm": 164.3,
   "weightKg": 57.4,
-  "targetWeightKg": 52.0
+  "targetWeightKg": 52.0,
+  "targetPeriodValue": 3,
+  "targetPeriodUnit": "MONTH"
 }
 ```
 

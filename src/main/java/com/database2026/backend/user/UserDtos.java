@@ -22,6 +22,14 @@ public final class UserDtos {
             @NotNull @Positive BigDecimal weightKg,
             @Schema(description = "목표 몸무게(kg). 설정하지 않으면 null", example = "52.0")
             @Positive BigDecimal targetWeightKg,
+            @Schema(description = "목표 기간 값. 설정하지 않으면 null", example = "3")
+            @Min(1) Integer targetPeriodValue,
+            @Schema(
+                    description = "목표 기간 단위. targetPeriodValue가 있고 생략하면 MONTH로 저장합니다.",
+                    allowableValues = {"WEEK", "MONTH"},
+                    example = "MONTH"
+            )
+            String targetPeriodUnit,
             @Schema(
                     description = "활동수준. 생략하면 LOW_ACTIVE로 저장합니다.",
                     allowableValues = {"SEDENTARY", "LOW_ACTIVE", "ACTIVE", "VERY_ACTIVE"},
@@ -51,6 +59,8 @@ public final class UserDtos {
             BigDecimal heightCm,
             BigDecimal weightKg,
             BigDecimal targetWeightKg,
+            Integer targetPeriodValue,
+            String targetPeriodUnit,
             BigDecimal bmi,
             String activityLevel
     ) {

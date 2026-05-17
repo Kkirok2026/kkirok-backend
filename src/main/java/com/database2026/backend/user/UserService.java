@@ -43,6 +43,8 @@ public class UserService {
                                p.height_cm,
                                p.weight_kg,
                                p.target_weight_kg,
+                               p.target_period_value,
+                               p.target_period_unit,
                                p.bmi,
                                p.activity_level,
                                u.student_email,
@@ -66,6 +68,8 @@ public class UserService {
                                 rs.getBigDecimal("height_cm"),
                                 rs.getBigDecimal("weight_kg"),
                                 rs.getBigDecimal("target_weight_kg"),
+                                rs.getObject("target_period_value", Integer.class),
+                                rs.getString("target_period_unit"),
                                 rs.getBigDecimal("bmi"),
                                 rs.getString("activity_level")
                         ),
@@ -91,19 +95,31 @@ public class UserService {
             BigDecimal heightCm,
             BigDecimal weightKg,
             BigDecimal targetWeightKg,
+            Integer targetPeriodValue,
+            String targetPeriodUnit,
             BigDecimal bmi,
             String activityLevel
     ) {
         if (gender == null) {
             return null;
         }
-        return new HealthProfileResponse(gender, heightCm, weightKg, targetWeightKg, bmi, activityLevel);
+        return new HealthProfileResponse(
+                gender,
+                heightCm,
+                weightKg,
+                targetWeightKg,
+                targetPeriodValue,
+                targetPeriodUnit,
+                bmi,
+                activityLevel
+        );
     }
 
     @Transactional
     public HealthProfileResponse updateProfile(long userId, ProfileUpdateRequest request) {
         validateGender(request.gender());
         String activityLevel = normalizeActivityLevel(request.activityLevel());
+        String targetPeriodUnit = normalizeTargetPeriodUnit(request.targetPeriodValue(), request.targetPeriodUnit());
         BigDecimal bmi = calculateBmi(request.heightCm(), request.weightKg());
         if (request.age() != null) {
             jdbcTemplate.update("""
@@ -113,20 +129,37 @@ public class UserService {
                     """, request.age(), userId);
         }
         jdbcTemplate.update("""
-                insert into user_health_profile (user_id, height_cm, weight_kg, target_weight_kg, gender, bmi, activity_level)
-                values (?, ?, ?, ?, ?, ?, ?)
+                insert into user_health_profile (
+                    user_id, height_cm, weight_kg, target_weight_kg, target_period_value,
+                    target_period_unit, gender, bmi, activity_level
+                )
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 on duplicate key update height_cm = values(height_cm),
                                         weight_kg = values(weight_kg),
                                         target_weight_kg = values(target_weight_kg),
+                                        target_period_value = values(target_period_value),
+                                        target_period_unit = values(target_period_unit),
                                         gender = values(gender),
                                         bmi = values(bmi),
                                         activity_level = values(activity_level)
-                """, userId, request.heightCm(), request.weightKg(), request.targetWeightKg(), request.gender(), bmi, activityLevel);
+                """,
+                userId,
+                request.heightCm(),
+                request.weightKg(),
+                request.targetWeightKg(),
+                request.targetPeriodValue(),
+                targetPeriodUnit,
+                request.gender(),
+                bmi,
+                activityLevel
+        );
         return new HealthProfileResponse(
                 request.gender(),
                 request.heightCm(),
                 request.weightKg(),
                 request.targetWeightKg(),
+                request.targetPeriodValue(),
+                targetPeriodUnit,
                 bmi,
                 activityLevel
         );
@@ -347,6 +380,23 @@ public class UserService {
             throw DomainException.badRequest(
                     "ACTIVITY_LEVEL_INVALID",
                     "activityLevel은 SEDENTARY, LOW_ACTIVE, ACTIVE, VERY_ACTIVE 중 하나여야 합니다."
+            );
+        }
+        return normalized;
+    }
+
+    private String normalizeTargetPeriodUnit(Integer targetPeriodValue, String targetPeriodUnit) {
+        if (targetPeriodValue == null) {
+            return null;
+        }
+        if (targetPeriodUnit == null || targetPeriodUnit.isBlank()) {
+            return "MONTH";
+        }
+        String normalized = targetPeriodUnit.trim().toUpperCase(Locale.ROOT);
+        if (!List.of("WEEK", "MONTH").contains(normalized)) {
+            throw DomainException.badRequest(
+                    "TARGET_PERIOD_UNIT_INVALID",
+                    "targetPeriodUnit은 WEEK 또는 MONTH여야 합니다."
             );
         }
         return normalized;
