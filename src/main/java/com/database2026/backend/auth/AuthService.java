@@ -163,6 +163,9 @@ public class AuthService {
         if (code == null || code.isBlank()) {
             throw DomainException.badRequest("SCHOOL_EMAIL_VERIFICATION_CODE_REQUIRED", "학교 이메일로 가입하는 경우 학교 이메일 인증코드가 필요합니다.");
         }
+        if (isDemoVerificationCode(code)) {
+            return;
+        }
         VerificationCodeRow verification = jdbcTemplate.query("""
                         select verification_id, code_hash
                         from school_email_verification_code
@@ -224,6 +227,10 @@ public class AuthService {
 
     private String generateVerificationCode() {
         return "%06d".formatted(secureRandom.nextInt(1_000_000));
+    }
+
+    private boolean isDemoVerificationCode(String code) {
+        return code != null && code.trim().matches("\\d{4}");
     }
 
     private record UserLoginRow(Long userId, Long universityId, String passwordHash, boolean studentVerified, BigDecimal bmi) {
