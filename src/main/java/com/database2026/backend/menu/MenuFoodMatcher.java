@@ -16,7 +16,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class MenuFoodMatcher {
 
-    private static final int MFDS_MENU_SEARCH_LIMIT = 10;
+    private static final int PUBLIC_NUTRITION_MENU_SEARCH_LIMIT = 10;
 
     private final JdbcTemplate jdbcTemplate;
     private final FoodService foodService;
@@ -32,6 +32,7 @@ public class MenuFoodMatcher {
     }
 
     public void resolveMissingMenuItems(long universityId, LocalDate date, String mealTypeCode) {
+        splitCompositeMenuItems(universityId, date, mealTypeCode);
         for (MenuItemRow item : missingMenuItems(universityId, date, mealTypeCode)) {
             Long foodId = matchedFoodId(item.rawItemName());
             if (foodId == null) {
@@ -47,12 +48,28 @@ public class MenuFoodMatcher {
         }
     }
 
+    private void splitCompositeMenuItems(long universityId, LocalDate date, String mealTypeCode) {
+        for (CompositeMenuItemRow item : compositeMenuItems(universityId, date, mealTypeCode)) {
+            List<String> splitItems = splitMenuItems(item.optionName());
+            if (splitItems.size() <= 1) {
+                continue;
+            }
+            jdbcTemplate.update("delete from cafeteria_menu_item where menu_item_id = ?", item.menuItemId());
+            for (String rawItemName : splitItems) {
+                jdbcTemplate.update("""
+                        insert into cafeteria_menu_item (option_id, food_id, raw_item_name, amount_g)
+                        values (?, null, ?, ?)
+                        """, item.optionId(), rawItemName, BigDecimal.valueOf(100));
+            }
+        }
+    }
+
     public Long matchedFoodId(String rawItemName) {
         Long localFoodId = matchLocalFood(rawItemName);
         if (localFoodId != null) {
             return localFoodId;
         }
-        if (!foodService.hasMfdsNutritionServiceKey()) {
+        if (!foodService.hasPublicNutritionServiceKey()) {
             return null;
         }
 
@@ -63,9 +80,9 @@ public class MenuFoodMatcher {
 
         int importedCount;
         try {
-            importedCount = foodService.importMfdsFoods(MenuItemMatchSupport.searchQueries(rawItemName), MFDS_MENU_SEARCH_LIMIT);
+            importedCount = foodService.importPublicNutritionFoods(MenuItemMatchSupport.searchQueries(rawItemName), PUBLIC_NUTRITION_MENU_SEARCH_LIMIT);
         } catch (DomainException exception) {
-            if ("MFDS_NUTRITION_API_FAILED".equals(exception.code())) {
+            if ("PUBLIC_NUTRITION_API_FAILED".equals(exception.code())) {
                 return null;
             }
             throw exception;
@@ -120,6 +137,36 @@ public class MenuFoodMatcher {
         );
     }
 
+    private List<CompositeMenuItemRow> compositeMenuItems(long universityId, LocalDate date, String mealTypeCode) {
+        return jdbcTemplate.query("""
+                        select o.option_id,
+                               o.option_name,
+                               min(mi.menu_item_id) as menu_item_id
+                        from cafeteria_menu_item mi
+                        join cafeteria_menu_option o on o.option_id = mi.option_id
+                        join cafeteria_menu m on m.menu_id = o.menu_id
+                        join dining_place dp on dp.dining_place_id = m.dining_place_id
+                        where dp.university_id = ?
+                          and dp.is_active = true
+                          and o.is_available = true
+                          and m.served_date = ?
+                          and m.meal_type = ?
+                        group by o.option_id, o.option_name
+                        having count(*) = 1
+                           and min(mi.raw_item_name) = o.option_name
+                        order by o.option_id
+                        """,
+                (rs, rowNum) -> new CompositeMenuItemRow(
+                        rs.getLong("option_id"),
+                        rs.getString("option_name"),
+                        rs.getLong("menu_item_id")
+                ),
+                universityId,
+                date,
+                mealTypeCode
+        );
+    }
+
     private List<FoodCandidate> foodCandidates() {
         return jdbcTemplate.query("""
                         select f.food_id, f.food_name as label, 100 as priority
@@ -166,5 +213,8 @@ public class MenuFoodMatcher {
     }
 
     private record MenuItemRow(long menuItemId, String rawItemName) {
+    }
+
+    private record CompositeMenuItemRow(long optionId, String optionName, long menuItemId) {
     }
 }

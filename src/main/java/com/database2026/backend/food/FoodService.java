@@ -10,7 +10,6 @@ import com.database2026.backend.food.FoodDtos.FoodSummary;
 import com.database2026.backend.support.SqlSupport;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -28,30 +27,29 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class FoodService {
 
-    private static final String MFDS_SOURCE_NAME = "MFDS_INTEGRATED";
-    private static final String FATSECRET_SOURCE_NAME = "FATSECRET";
+    private static final String PUBLIC_NUTRITION_SOURCE_NAME = "NATIONAL_INTEGRATED";
     private static final String USER_CUSTOM_SOURCE_NAME = "USER_CUSTOM";
     private static final BigDecimal DEFAULT_CUSTOM_FOOD_AMOUNT_G = BigDecimal.valueOf(100);
+    private static final BigDecimal CARB_KCAL_PER_G = BigDecimal.valueOf(4);
+    private static final BigDecimal PROTEIN_KCAL_PER_G = BigDecimal.valueOf(4);
+    private static final BigDecimal FAT_KCAL_PER_G = BigDecimal.valueOf(9);
 
     private final JdbcTemplate jdbcTemplate;
     private final SqlSupport sqlSupport;
-    private final MfdsNutritionApiClient mfdsNutritionApiClient;
-    private final FatSecretApiClient fatSecretApiClient;
+    private final PublicNutritionApiClient publicNutritionApiClient;
 
     public FoodService(
             JdbcTemplate jdbcTemplate,
             SqlSupport sqlSupport,
-            MfdsNutritionApiClient mfdsNutritionApiClient,
-            FatSecretApiClient fatSecretApiClient
+            PublicNutritionApiClient publicNutritionApiClient
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.sqlSupport = sqlSupport;
-        this.mfdsNutritionApiClient = mfdsNutritionApiClient;
-        this.fatSecretApiClient = fatSecretApiClient;
+        this.publicNutritionApiClient = publicNutritionApiClient;
     }
 
-    public boolean hasMfdsNutritionServiceKey() {
-        return mfdsNutritionApiClient.hasServiceKey();
+    public boolean hasPublicNutritionServiceKey() {
+        return publicNutritionApiClient.hasServiceKey();
     }
 
     @Transactional
@@ -62,14 +60,10 @@ public class FoodService {
         String compactPattern = "%" + compactQuery(normalizedQuery) + "%";
         Long currentUserId = userId.orElse(null);
 
-        importFatSecretRows(normalizedQuery, safeLimit);
         List<FoodSummary> items = searchLocal(pattern, compactPattern, safeLimit, currentUserId);
-        if (items.isEmpty()) {
-            items = searchFatSecretSuggestionMatches(normalizedQuery, safeLimit, currentUserId);
-        }
         if (items.size() < safeLimit) {
-            importMfdsNutritionRows(normalizedQuery, safeLimit);
-            items = mergeDeduplicated(items, searchLocal(pattern, compactPattern, safeLimit, currentUserId), safeLimit);
+            importPublicNutritionSearchRows(normalizedQuery, safeLimit);
+            items = searchLocal(pattern, compactPattern, safeLimit, currentUserId);
         }
         return new FoodSearchResponse(items);
     }
@@ -78,13 +72,6 @@ public class FoodService {
         String normalizedQuery = normalizeQuery(query);
         int safeLimit = Math.min(Math.max(limit, 1), 10);
         Map<String, String> suggestions = new LinkedHashMap<>();
-
-        for (String suggestion : fatSecretSuggestions(normalizedQuery, safeLimit)) {
-            addSuggestion(suggestions, suggestion);
-            if (suggestions.size() >= safeLimit) {
-                return new FoodSuggestionResponse(List.copyOf(suggestions.values()));
-            }
-        }
 
         String pattern = "%" + normalizedQuery + "%";
         String compactPattern = "%" + compactQuery(normalizedQuery) + "%";
@@ -98,8 +85,8 @@ public class FoodService {
     }
 
     @Transactional
-    public int importMfdsFoods(Collection<String> queries, int limit) {
-        return importMfdsNutritionRows(queries, limit);
+    public int importPublicNutritionFoods(Collection<String> queries, int limit) {
+        return importPublicNutritionRows(queries, limit);
     }
 
     @Transactional
@@ -116,7 +103,7 @@ public class FoodService {
                 .map(existingFoodId -> updateCustomFood(existingFoodId, userId, foodName, normalizedFoodName, amountG))
                 .orElseGet(() -> insertCustomFood(userId, foodName, normalizedFoodName, amountG));
         insertAlias(foodId, foodName);
-        upsertNutrientValue(foodId, "CALORIES_KCAL", per100g(request.caloriesKcal(), amountG));
+        upsertNutrientValue(foodId, "CALORIES_KCAL", per100g(calculatedCaloriesKcal(request), amountG));
         upsertNutrientValue(foodId, "CARB_G", per100g(request.carbG(), amountG));
         upsertNutrientValue(foodId, "PROTEIN_G", per100g(request.proteinG(), amountG));
         upsertNutrientValue(foodId, "FAT_G", per100g(request.fatG(), amountG));
@@ -150,7 +137,7 @@ public class FoodService {
                                        coalesce(f.sodium_mg * f.default_serving_g / 100, 0) as sodium_mg
                                 from food f
                                 where (
-                                      f.source_name in (?, ?)
+                                      f.source_name = ?
                                       or (
                                           ? is not null
                                           and f.source_name = 'USER_CUSTOM'
@@ -165,6 +152,8 @@ public class FoodService {
                                   and (
                                       lower(f.food_name) like ?
                                       or replace(lower(f.food_name), ' ', '') like ?
+                                      or f.food_name like ?
+                                      or replace(f.food_name, ' ', '') like ?
                                       or exists (
                                        select 1
                                        from food_alias a
@@ -178,9 +167,8 @@ public class FoodService {
                                 group by f.food_id, f.source_name, f.source_food_code, f.food_name, f.default_serving_g,
                                          f.calories_kcal, f.carb_g, f.protein_g, f.fat_g, f.sugar_g, f.sodium_mg
                                 order by case
-                                             when f.source_name = 'FATSECRET' then 0
-                                             when f.source_name = 'USER_CUSTOM' then 1
-                                             when f.source_name = 'MFDS_INTEGRATED' then 2
+                                             when f.source_name = 'USER_CUSTOM' then 0
+                                             when f.source_name = 'NATIONAL_INTEGRATED' then 1
                                              else 3
                                          end,
                                          f.food_name
@@ -197,31 +185,18 @@ public class FoodService {
                         ),
                         pattern,
                         compactPattern,
-                        MFDS_SOURCE_NAME,
-                        FATSECRET_SOURCE_NAME,
+                        PUBLIC_NUTRITION_SOURCE_NAME,
                         userId,
                         userId,
+                        pattern,
+                        compactPattern,
                         pattern,
                         compactPattern,
                         pattern,
                         compactPattern,
                         fetchLimit
                 );
-        return deduplicateByFoodName(items, safeLimit);
-    }
-
-    private List<String> fatSecretSuggestions(String query, int limit) {
-        if (!fatSecretApiClient.hasCredentials()) {
-            return List.of();
-        }
-        try {
-            return fatSecretApiClient.autocomplete(query, limit);
-        } catch (DomainException exception) {
-            if (exception.code() != null && exception.code().startsWith("FATSECRET_")) {
-                return List.of();
-            }
-            throw exception;
-        }
+        return deduplicateSearchResults(items, safeLimit);
     }
 
     private List<String> localSuggestions(String pattern, String compactPattern, int fetchLimit, Long userId) {
@@ -230,7 +205,7 @@ public class FoodService {
                         select f.food_name as suggestion
                         from food f
                         where (
-                              f.source_name in (?, ?)
+                              f.source_name = ?
                               or (
                                   ? is not null
                                   and f.source_name = ?
@@ -245,22 +220,24 @@ public class FoodService {
                           and (
                               lower(f.food_name) like ?
                               or replace(lower(f.food_name), ' ', '') like ?
+                              or f.food_name like ?
+                              or replace(f.food_name, ' ', '') like ?
                           )
                         order by case
-                                     when f.source_name = 'FATSECRET' then 0
-                                     when f.source_name = 'USER_CUSTOM' then 1
-                                     when f.source_name = 'MFDS_INTEGRATED' then 2
+                                     when f.source_name = 'USER_CUSTOM' then 0
+                                     when f.source_name = 'NATIONAL_INTEGRATED' then 1
                                      else 3
                                  end,
                                  f.food_name
                         limit ?
                         """,
                 (rs, rowNum) -> rs.getString("suggestion"),
-                FATSECRET_SOURCE_NAME,
-                MFDS_SOURCE_NAME,
+                PUBLIC_NUTRITION_SOURCE_NAME,
                 userId,
                 USER_CUSTOM_SOURCE_NAME,
                 userId,
+                pattern,
+                compactPattern,
                 pattern,
                 compactPattern,
                 fetchLimit
@@ -270,7 +247,7 @@ public class FoodService {
                         from food_alias a
                         join food f on f.food_id = a.food_id
                         where (
-                              f.source_name in (?, ?)
+                              f.source_name = ?
                               or (
                                   ? is not null
                                   and f.source_name = ?
@@ -287,9 +264,8 @@ public class FoodService {
                               or replace(lower(a.normalized_alias), ' ', '') like ?
                           )
                         order by case
-                                     when f.source_name = 'FATSECRET' then 0
-                                     when f.source_name = 'USER_CUSTOM' then 1
-                                     when f.source_name = 'MFDS_INTEGRATED' then 2
+                                     when f.source_name = 'USER_CUSTOM' then 0
+                                     when f.source_name = 'NATIONAL_INTEGRATED' then 1
                                      else 3
                                  end,
                                  a.priority desc,
@@ -297,8 +273,7 @@ public class FoodService {
                         limit ?
                         """,
                 (rs, rowNum) -> rs.getString("suggestion"),
-                FATSECRET_SOURCE_NAME,
-                MFDS_SOURCE_NAME,
+                PUBLIC_NUTRITION_SOURCE_NAME,
                 userId,
                 USER_CUSTOM_SOURCE_NAME,
                 userId,
@@ -317,46 +292,10 @@ public class FoodService {
         suggestions.putIfAbsent(suggestionDeduplicationKey(value), value);
     }
 
-    private List<FoodSummary> searchFatSecretSuggestionMatches(String query, int limit, Long userId) {
-        List<FoodSummary> matches = new ArrayList<>();
-        String originalKey = suggestionDeduplicationKey(query);
-        for (String suggestion : fatSecretSuggestions(query, Math.min(limit, 10))) {
-            String suggestedQuery = optionalSearchQuery(suggestion);
-            if (suggestedQuery.isBlank() || suggestionDeduplicationKey(suggestedQuery).equals(originalKey)) {
-                continue;
-            }
-            importFatSecretRows(suggestedQuery, limit);
-            String pattern = "%" + suggestedQuery + "%";
-            String compactPattern = "%" + compactQuery(suggestedQuery) + "%";
-            matches = mergeDeduplicated(matches, searchLocal(pattern, compactPattern, limit, userId), limit);
-            if (matches.size() >= limit) {
-                break;
-            }
-        }
-        return matches;
-    }
-
-    private List<FoodSummary> mergeDeduplicated(List<FoodSummary> first, List<FoodSummary> second, int limit) {
-        Map<String, FoodSummary> deduplicated = new LinkedHashMap<>();
-        for (FoodSummary item : first) {
-            deduplicated.putIfAbsent(foodNameDeduplicationKey(item), item);
-            if (deduplicated.size() >= limit) {
-                return List.copyOf(deduplicated.values());
-            }
-        }
-        for (FoodSummary item : second) {
-            deduplicated.putIfAbsent(foodNameDeduplicationKey(item), item);
-            if (deduplicated.size() >= limit) {
-                break;
-            }
-        }
-        return List.copyOf(deduplicated.values());
-    }
-
-    private List<FoodSummary> deduplicateByFoodName(List<FoodSummary> items, int limit) {
+    private List<FoodSummary> deduplicateSearchResults(List<FoodSummary> items, int limit) {
         Map<String, FoodSummary> deduplicated = new LinkedHashMap<>();
         for (FoodSummary item : items) {
-            String key = foodNameDeduplicationKey(item);
+            String key = searchResultDeduplicationKey(item);
             deduplicated.putIfAbsent(key, item);
             if (deduplicated.size() >= limit) {
                 break;
@@ -365,28 +304,52 @@ public class FoodService {
         return List.copyOf(deduplicated.values());
     }
 
-    private String foodNameDeduplicationKey(FoodSummary item) {
+    private String searchResultDeduplicationKey(FoodSummary item) {
+        if (!USER_CUSTOM_SOURCE_NAME.equals(item.sourceName()) && item.sourceFoodCode() != null && !item.sourceFoodCode().isBlank()) {
+            return item.sourceName() + ":" + item.sourceFoodCode();
+        }
         String foodName = item.foodName() == null ? "" : item.foodName();
         String normalizedFoodName = foodName.toLowerCase(Locale.ROOT).replaceAll("[\\s_\\-()/]+", "");
         if (!normalizedFoodName.isBlank()) {
-            return normalizedFoodName;
+            return item.sourceName() + ":" + normalizedFoodName;
         }
-        return item.sourceName() + ":" + item.sourceFoodCode();
+        return item.sourceName() + ":" + item.foodId();
     }
 
     private String suggestionDeduplicationKey(String suggestion) {
         return suggestion.toLowerCase(Locale.ROOT).replaceAll("[\\s_\\-()/]+", "");
     }
 
-    private int importMfdsNutritionRows(String query, int limit) {
+    private int importPublicNutritionRows(String query, int limit) {
         Set<String> queries = new LinkedHashSet<>();
         queries.add(query);
         queries.add(compactQuery(query));
-        return importMfdsNutritionRows(queries, limit);
+        return importPublicNutritionRows(queries, limit);
     }
 
-    private int importMfdsNutritionRows(Collection<String> queries, int limit) {
-        if (!mfdsNutritionApiClient.hasServiceKey()) {
+    private int importPublicNutritionSearchRows(String query, int limit) {
+        int importedCount = importPublicNutritionRows(query, limit);
+        if (importedCount >= limit) {
+            return importedCount;
+        }
+        List<PublicNutritionApiClient.NutritionRow> rows;
+        try {
+            rows = publicNutritionApiClient.searchFoodsContaining(query, limit);
+        } catch (DomainException exception) {
+            if ("PUBLIC_NUTRITION_API_FAILED".equals(exception.code())) {
+                return importedCount;
+            }
+            throw exception;
+        }
+        for (PublicNutritionApiClient.NutritionRow row : rows) {
+            importPublicNutritionRow(row);
+            importedCount++;
+        }
+        return importedCount;
+    }
+
+    private int importPublicNutritionRows(Collection<String> queries, int limit) {
+        if (!publicNutritionApiClient.hasServiceKey()) {
             return 0;
         }
         int safeLimit = Math.min(Math.max(limit, 1), 50);
@@ -402,59 +365,32 @@ public class FoodService {
 
         int importedCount = 0;
         for (String apiQuery : apiQueries) {
-            List<MfdsNutritionApiClient.NutritionRow> rows;
+            List<PublicNutritionApiClient.NutritionRow> rows;
             try {
-                rows = mfdsNutritionApiClient.searchFoods(apiQuery, safeLimit);
+                rows = publicNutritionApiClient.searchFoods(apiQuery, safeLimit);
             } catch (DomainException exception) {
-                if (exception.code() != null && exception.code().startsWith("MFDS_")) {
+                if ("PUBLIC_NUTRITION_API_FAILED".equals(exception.code())) {
                     return importedCount;
                 }
                 throw exception;
             }
-            for (MfdsNutritionApiClient.NutritionRow row : rows) {
-                long foodId = upsertFood(row);
-                insertAlias(foodId, row.foodName());
-                upsertNutrientValue(foodId, "CALORIES_KCAL", row.caloriesKcal());
-                upsertNutrientValue(foodId, "CARB_G", row.carbG());
-                upsertNutrientValue(foodId, "PROTEIN_G", row.proteinG());
-                upsertNutrientValue(foodId, "FAT_G", row.fatG());
-                upsertNutrientValue(foodId, "SUGAR_G", row.sugarG());
-                upsertNutrientValue(foodId, "SODIUM_MG", row.sodiumMg());
+            for (PublicNutritionApiClient.NutritionRow row : rows) {
+                importPublicNutritionRow(row);
                 importedCount++;
             }
         }
         return importedCount;
     }
 
-    private int importFatSecretRows(String query, int limit) {
-        if (!fatSecretApiClient.hasCredentials()) {
-            return 0;
-        }
-        int safeLimit = Math.min(Math.max(limit, 1), 50);
-        List<FatSecretApiClient.FoodRow> rows;
-        try {
-            rows = fatSecretApiClient.searchFoods(query, safeLimit);
-        } catch (DomainException exception) {
-            if (exception.code() != null && exception.code().startsWith("FATSECRET_")) {
-                return 0;
-            }
-            throw exception;
-        }
-
-        int importedCount = 0;
-        for (FatSecretApiClient.FoodRow row : rows) {
-            long foodId = upsertFatSecretFood(row);
-            insertAlias(foodId, row.foodName());
-            insertAlias(foodId, row.brandName(), "BRAND", 50);
-            upsertNutrientValue(foodId, "CALORIES_KCAL", row.caloriesKcal());
-            upsertNutrientValue(foodId, "CARB_G", row.carbG());
-            upsertNutrientValue(foodId, "PROTEIN_G", row.proteinG());
-            upsertNutrientValue(foodId, "FAT_G", row.fatG());
-            upsertNutrientValue(foodId, "SUGAR_G", row.sugarG());
-            upsertNutrientValue(foodId, "SODIUM_MG", row.sodiumMg());
-            importedCount++;
-        }
-        return importedCount;
+    private void importPublicNutritionRow(PublicNutritionApiClient.NutritionRow row) {
+        long foodId = upsertFood(row);
+        insertAlias(foodId, row.foodName());
+        upsertNutrientValue(foodId, "CALORIES_KCAL", row.caloriesKcal());
+        upsertNutrientValue(foodId, "CARB_G", row.carbG());
+        upsertNutrientValue(foodId, "PROTEIN_G", row.proteinG());
+        upsertNutrientValue(foodId, "FAT_G", row.fatG());
+        upsertNutrientValue(foodId, "SUGAR_G", row.sugarG());
+        upsertNutrientValue(foodId, "SODIUM_MG", row.sodiumMg());
     }
 
     private Optional<Long> customFoodId(long userId, String normalizedFoodName) {
@@ -475,9 +411,9 @@ public class FoodService {
 
     private long insertCustomFood(long userId, String foodName, String normalizedFoodName, BigDecimal amountG) {
         long foodId = sqlSupport.insert("""
-                insert into food (source_name, source_food_code, food_name, default_serving_g, source_category)
-                values (?, ?, ?, ?, ?)
-                """, USER_CUSTOM_SOURCE_NAME, customFoodCode(userId), foodName, amountG, "사용자 직접 입력");
+                insert into food (source_name, source_food_code, food_name, default_serving_g)
+                values (?, ?, ?, ?)
+                """, USER_CUSTOM_SOURCE_NAME, customFoodCode(userId), foodName, amountG);
         sqlSupport.update("""
                 insert into user_custom_food (user_id, food_id, food_name, normalized_food_name, serving_amount_g)
                 values (?, ?, ?, ?, ?)
@@ -489,8 +425,7 @@ public class FoodService {
         jdbcTemplate.update("""
                 update food
                 set food_name = ?,
-                    default_serving_g = ?,
-                    source_category = '사용자 직접 입력'
+                    default_serving_g = ?
                 where food_id = ?
                   and source_name = ?
                 """, foodName, amountG, foodId, USER_CUSTOM_SOURCE_NAME);
@@ -505,57 +440,25 @@ public class FoodService {
         return foodId;
     }
 
-    private long upsertFood(MfdsNutritionApiClient.NutritionRow row) {
-        Optional<Long> existingFoodId = foodIdBySourceCode(MFDS_SOURCE_NAME, row.foodCode());
+    private long upsertFood(PublicNutritionApiClient.NutritionRow row) {
+        Optional<Long> existingFoodId = foodIdBySourceCode(PUBLIC_NUTRITION_SOURCE_NAME, row.foodCode());
         if (existingFoodId.isPresent()) {
             jdbcTemplate.update("""
                     update food
                     set food_name = ?,
-                        default_serving_g = ?,
-                        source_category = coalesce(?, source_category)
+                        default_serving_g = ?
                     where food_id = ?
-                    """, row.foodName(), row.defaultServingG(), row.categoryName(), existingFoodId.get());
+                    """, row.foodName(), row.defaultServingG(), existingFoodId.get());
             return existingFoodId.get();
         }
         try {
             return sqlSupport.insert("""
-                    insert into food (source_name, source_food_code, food_name, default_serving_g, source_category)
-                    values (?, ?, ?, ?, ?)
-                    """, MFDS_SOURCE_NAME, row.foodCode(), row.foodName(), row.defaultServingG(), row.categoryName());
+                    insert into food (source_name, source_food_code, food_name, default_serving_g)
+                    values (?, ?, ?, ?)
+                    """, PUBLIC_NUTRITION_SOURCE_NAME, row.foodCode(), row.foodName(), row.defaultServingG());
         } catch (DuplicateKeyException exception) {
-            Optional<Long> duplicateFoodId = foodIdBySourceCode(MFDS_SOURCE_NAME, row.foodCode())
-                    .or(() -> foodIdBySourceNameAndFoodName(MFDS_SOURCE_NAME, row.foodName()));
-            if (duplicateFoodId.isPresent()) {
-                return duplicateFoodId.get();
-            }
-            throw exception;
-        }
-    }
-
-    private long upsertFatSecretFood(FatSecretApiClient.FoodRow row) {
-        String foodName = truncate(row.foodName(), 255);
-        String sourceFoodCode = truncate(row.foodCode(), 100);
-        String sourceCategory = truncate(fatSecretCategory(row.foodType()), 100);
-        BigDecimal defaultServingG = positiveOrDefault(row.defaultServingG(), BigDecimal.valueOf(100));
-        Optional<Long> existingFoodId = foodIdBySourceCode(FATSECRET_SOURCE_NAME, sourceFoodCode);
-        if (existingFoodId.isPresent()) {
-            jdbcTemplate.update("""
-                    update food
-                    set food_name = ?,
-                        default_serving_g = ?,
-                        source_category = ?
-                    where food_id = ?
-                    """, foodName, defaultServingG, sourceCategory, existingFoodId.get());
-            return existingFoodId.get();
-        }
-        try {
-            return sqlSupport.insert("""
-                    insert into food (source_name, source_food_code, food_name, default_serving_g, source_category)
-                    values (?, ?, ?, ?, ?)
-                    """, FATSECRET_SOURCE_NAME, sourceFoodCode, foodName, defaultServingG, sourceCategory);
-        } catch (DuplicateKeyException exception) {
-            Optional<Long> duplicateFoodId = foodIdBySourceCode(FATSECRET_SOURCE_NAME, sourceFoodCode)
-                    .or(() -> foodIdBySourceNameAndFoodName(FATSECRET_SOURCE_NAME, foodName));
+            Optional<Long> duplicateFoodId = foodIdBySourceCode(PUBLIC_NUTRITION_SOURCE_NAME, row.foodCode())
+                    .or(() -> foodIdBySourceNameAndFoodName(PUBLIC_NUTRITION_SOURCE_NAME, row.foodName()));
             if (duplicateFoodId.isPresent()) {
                 return duplicateFoodId.get();
             }
@@ -671,7 +574,6 @@ public class FoodService {
                                f.source_name,
                                f.source_food_code,
                                f.food_name,
-                               f.source_category,
                                f.default_serving_g,
                                coalesce(f.calories_kcal * f.default_serving_g / 100, 0) as calories_kcal,
                                coalesce(f.carb_g * f.default_serving_g / 100, 0) as carb_g,
@@ -681,8 +583,8 @@ public class FoodService {
                                coalesce(f.sodium_mg * f.default_serving_g / 100, 0) as sodium_mg
                         from food f
                         where f.food_id = ?
-                          and f.source_name in ('MFDS_INTEGRATED', 'FATSECRET')
-                        group by f.food_id, f.source_name, f.source_food_code, f.food_name, f.source_category, f.default_serving_g,
+                          and f.source_name = 'NATIONAL_INTEGRATED'
+                        group by f.food_id, f.source_name, f.source_food_code, f.food_name, f.default_serving_g,
                                  f.calories_kcal, f.carb_g, f.protein_g, f.fat_g, f.sugar_g, f.sodium_mg
                         """,
                 (rs, rowNum) -> new FoodDetail(
@@ -690,7 +592,6 @@ public class FoodService {
                         rs.getString("source_name"),
                         rs.getString("source_food_code"),
                         rs.getString("food_name"),
-                        rs.getString("source_category"),
                         rs.getBigDecimal("default_serving_g"),
                         NutrientTotals.from(rs)
                 ),
@@ -745,26 +646,21 @@ public class FoodService {
         return amount.multiply(BigDecimal.valueOf(100)).divide(amountG, 4, RoundingMode.HALF_UP);
     }
 
-    private BigDecimal positiveOrDefault(BigDecimal value, BigDecimal defaultValue) {
-        return value == null || value.compareTo(BigDecimal.ZERO) <= 0 ? defaultValue : value;
+    private BigDecimal calculatedCaloriesKcal(CustomFoodCreateRequest request) {
+        return nonNegativeAmount(request.carbG()).multiply(CARB_KCAL_PER_G)
+                .add(nonNegativeAmount(request.proteinG()).multiply(PROTEIN_KCAL_PER_G))
+                .add(nonNegativeAmount(request.fatG()).multiply(FAT_KCAL_PER_G));
+    }
+
+    private BigDecimal nonNegativeAmount(BigDecimal amount) {
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) < 0) {
+            throw DomainException.badRequest("CUSTOM_FOOD_NUTRIENT_INVALID", "직접 입력 영양성분은 0 이상이어야 합니다.");
+        }
+        return amount;
     }
 
     private BigDecimal optionalAmount(BigDecimal amount) {
         return amount == null ? BigDecimal.ZERO : amount;
-    }
-
-    private String fatSecretCategory(String foodType) {
-        if (foodType == null || foodType.isBlank()) {
-            return "FatSecret";
-        }
-        return "FatSecret " + foodType.trim();
-    }
-
-    private String truncate(String value, int maxLength) {
-        if (value == null) {
-            return null;
-        }
-        return value.length() > maxLength ? value.substring(0, maxLength) : value;
     }
 
     private String customFoodCode(long userId) {

@@ -300,7 +300,7 @@ public class IngredientService {
                         select food_id, food_name
                         from food
                         where food_id = ?
-                          and source_name = 'MFDS_INTEGRATED'
+                          and source_name = 'NATIONAL_INTEGRATED'
                         """,
                 (rs, rowNum) -> new FoodLookup(rs.getLong("food_id"), rs.getString("food_name")),
                 foodId

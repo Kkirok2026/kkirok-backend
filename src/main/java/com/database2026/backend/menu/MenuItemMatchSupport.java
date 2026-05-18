@@ -10,7 +10,7 @@ import java.util.regex.Pattern;
 
 public final class MenuItemMatchSupport {
 
-    private static final Pattern MENU_ITEM_SEPARATOR = Pattern.compile("\\s*(/|\\n|,|&)\\s*");
+    private static final Pattern MENU_ITEM_SEPARATOR = Pattern.compile("\\s*(/|\\n|,|，|、)\\s*");
 
     private MenuItemMatchSupport() {
     }

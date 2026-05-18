@@ -180,7 +180,7 @@ erDiagram
 
 ### 음식 및 영양
 
-- `FOOD`(`food_id` PK, `source_name`, `source_food_code`, `food_name`, `default_serving_g`, `source_category`, `calories_kcal`, `carb_g`, `protein_g`, `fat_g`, `sugar_g`, `sodium_mg`)
+- `FOOD`(`food_id` PK, `source_name`, `source_food_code`, `food_name`, `default_serving_g`, `calories_kcal`, `carb_g`, `protein_g`, `fat_g`, `sugar_g`, `sodium_mg`)
 - `FOOD_ALIAS`(`alias_id` PK, `food_id` FK, `alias_name`, `normalized_alias`, `alias_type`, `priority`)
 - `USER_CUSTOM_FOOD`(`custom_food_id` PK, `user_id` FK, `food_id` FK/UK, `food_name`, `normalized_food_name`, `serving_amount_g`)
 

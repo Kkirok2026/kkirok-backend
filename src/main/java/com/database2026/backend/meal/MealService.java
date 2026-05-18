@@ -169,6 +169,10 @@ public class MealService {
     }
 
     private void insertMenuOptionItems(long mealLogId, MenuOptionContext option) {
+        if (option.hasOptionNutrients()) {
+            insertMealLogItem(mealLogId, null, option.optionId(), option.optionName(), BigDecimal.valueOf(100));
+            return;
+        }
         List<CafeteriaMenuItem> menuItems = cafeteriaMenuItems(option.optionId());
         if (menuItems.isEmpty()) {
             insertMealLogItem(mealLogId, null, option.optionId(), option.optionName(), BigDecimal.valueOf(100));
@@ -195,8 +199,7 @@ public class MealService {
                         from food
                         where food_id = ?
                           and (
-                              source_name = 'MFDS_INTEGRATED'
-                              or source_name = 'FATSECRET'
+                              source_name = 'NATIONAL_INTEGRATED'
                               or (
                                   source_name = 'USER_CUSTOM'
                                   and exists (
@@ -224,7 +227,16 @@ public class MealService {
                                o.option_name,
                                dp.university_id,
                                m.served_date,
-                               m.meal_type
+                               m.meal_type,
+                               case when o.calories_kcal is not null
+                                      or o.carb_g is not null
+                                      or o.protein_g is not null
+                                      or o.fat_g is not null
+                                      or o.sugar_g is not null
+                                      or o.sodium_mg is not null
+                                    then true
+                                    else false
+                               end as has_option_nutrients
                         from cafeteria_menu_option o
                         join cafeteria_menu m on m.menu_id = o.menu_id
                         join dining_place dp on dp.dining_place_id = m.dining_place_id
@@ -237,7 +249,8 @@ public class MealService {
                         rs.getString("option_name"),
                         rs.getLong("university_id"),
                         rs.getObject("served_date", LocalDate.class),
-                        rs.getString("meal_type")
+                        rs.getString("meal_type"),
+                        rs.getBoolean("has_option_nutrients")
                 ),
                 optionId
         ).stream().findFirst().orElseThrow(() -> DomainException.notFound("MENU_OPTION_NOT_FOUND", "식당 메뉴를 찾을 수 없습니다."));
@@ -342,7 +355,7 @@ public class MealService {
                                     else coalesce(o.sodium_mg * i.amount_g / 100, 0)
                                end as sodium_mg
                         from meal_log_item i
-                        left join cafeteria_menu_option o on o.option_id = i.source_menu_option_id
+                        left join v_menu_option_comparison o on o.option_id = i.source_menu_option_id
                         left join food f on f.food_id = i.food_id
                         where i.meal_log_id = ?
                         order by i.meal_log_item_id
@@ -537,7 +550,7 @@ public class MealService {
                                    else 0
                                end), 0) as sodium_mg
                         from meal_log_item i
-                        left join cafeteria_menu_option o on o.option_id = i.source_menu_option_id
+                        left join v_menu_option_comparison o on o.option_id = i.source_menu_option_id
                         left join food f on f.food_id = i.food_id
                         where i.meal_log_id = ?
                           and i.is_excluded = false
@@ -581,7 +594,7 @@ public class MealService {
                                end), 0) as sodium_mg
                         from meal_log d
                         join meal_log_item i on i.meal_log_id = d.meal_log_id
-                        left join cafeteria_menu_option o on o.option_id = i.source_menu_option_id
+                        left join v_menu_option_comparison o on o.option_id = i.source_menu_option_id
                         left join food f on f.food_id = i.food_id
                         where d.user_id = ?
                           and d.log_date = ?
@@ -880,7 +893,8 @@ public class MealService {
             String optionName,
             Long universityId,
             LocalDate servedDate,
-            String mealType
+            String mealType,
+            Boolean hasOptionNutrients
     ) {
     }
 

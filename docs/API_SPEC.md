@@ -283,7 +283,7 @@
 
 `GET /menus/compare?universityId=2&date=2026-05-11&mealType=LUNCH`
 
-`Authorization: Bearer <access_token>`이 필요하다. 일반 사용자는 `SCHOOL_EMAIL_USER_REQUIRED` 오류를 받으며, 자신의 학교가 아닌 대학교의 메뉴 비교는 `UNIVERSITY_SELECTION_MISMATCH` 오류를 받는다. 응답의 각 옵션은 요청 시점에 `cafeteria_menu_item`과 식약처 음식 영양값을 조인해 `caloriesKcal`, `carbG`, `proteinG`, `fatG`, `sugarG`, `sodiumMg` 합계를 계산한다.
+`Authorization: Bearer <access_token>`이 필요하다. 일반 사용자는 `SCHOOL_EMAIL_USER_REQUIRED` 오류를 받으며, 자신의 학교가 아닌 대학교의 메뉴 비교는 `UNIVERSITY_SELECTION_MISMATCH` 오류를 받는다. 응답의 각 옵션은 `v_menu_option_comparison` view를 통해 내려간다. 이 view는 옵션 자체에 저장된 영양값이 있으면 그 값을 우선 사용하고, 없으면 요청 시점에 `cafeteria_menu_item`과 식약처 음식 영양값을 조인해 `caloriesKcal`, `carbG`, `proteinG`, `fatG`, `sugarG`, `sodiumMg` 합계를 계산한다.
 
 사용자가 학생식당 메뉴를 하나 선택한 뒤 생활관식당과 비교할 때는 `studentOptionId`를 함께 보낸다.
 
@@ -326,13 +326,31 @@
 
 `GET /foods/search?q=닭가슴살&limit=20`
 
-FatSecret(`FATSECRET`)을 우선 검색하고, 검색 결과가 없으면 FatSecret autocomplete 추천어로 한 번 더 FatSecret 검색을 수행한다. 부족한 결과는 식약처 음식 마스터(`MFDS_INTEGRATED`)와 내 직접 입력 음식(`USER_CUSTOM`)에서 보완한다. 같은 음식명으로 중복되는 검색 결과는 우선순위가 가장 높은 1개만 반환한다. 식당 메뉴 원문은 검색 결과에 포함하지 않는다. 프론트에서는 한글 쿼리를 URL 인코딩해야 한다.
+DB에 저장된 전국통합식품영양성분정보 표준데이터 음식 마스터(`NATIONAL_INTEGRATED`)와 내 직접 입력 음식(`USER_CUSTOM`)을 검색한다. DB 결과가 요청 limit보다 부족하면 전국통합식품영양성분정보 표준데이터 OpenAPI를 호출해 정확명 검색 결과를 저장하고, 그래도 부족하면 OpenAPI 전체 페이지를 읽어 `foodNm` 포함 결과를 저장한 뒤 다시 반환한다. API 응답에서 같은 `foodCd`가 반복되면 첫 번째 행만 저장하고, 표준데이터는 `sourceFoodCode`가 다르면 같은 음식명도 별도 결과로 반환한다. 식당 메뉴 원문은 검색 결과에 포함하지 않는다. 프론트에서는 한글 쿼리를 URL 인코딩해야 한다.
 
 ### 음식 검색어 추천
 
 `GET /foods/suggestions?q=닭가&limit=10`
 
-FatSecret autocomplete를 우선 호출해 추천 검색어 문자열을 반환한다. FatSecret autocomplete는 저장 가능한 음식 식별자를 반환하지 않으므로 `food_alias`에 저장하지 않는다. FatSecret 권한 또는 네트워크 문제로 호출할 수 없으면 로컬 `food.food_name`, `food_alias.alias_name`에서 중복을 제거해 추천어를 반환한다.
+로컬 `food.food_name`, `food_alias.alias_name`에서 중복을 제거해 추천 검색어 문자열을 반환한다.
+
+### 내 직접 입력 음식 등록
+
+`POST /foods/custom`
+
+검색 결과에 없는 음식을 사용자의 개인 음식으로 등록한다. `amountG`는 입력한 영양값의 기준량이며 생략하면 100g으로 저장한다. 열량은 입력받지 않아도 되며, 서버가 `carbG * 4 + proteinG * 4 + fatG * 9` 공식으로 자동 계산한다. 기존 클라이언트 호환을 위해 `caloriesKcal`을 보내도 요청은 받을 수 있지만 저장 열량은 탄수화물/단백질/지방 값으로 계산한다.
+
+```json
+{
+  "foodName": "저지방 우유",
+  "amountG": 200,
+  "carbG": 10,
+  "proteinG": 6,
+  "fatG": 2,
+  "sugarG": 8,
+  "sodiumMg": 100
+}
+```
 
 ### 음식 상세
 

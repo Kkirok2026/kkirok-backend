@@ -155,66 +155,29 @@ public class MenuService {
 
     private List<MenuOptionRow> menuOptionRows(long universityId, LocalDate date, String mealTypeCode) {
         return jdbcTemplate.query("""
-                        select dp.dining_place_id,
-                               dp.dining_place_name,
-                               dp.dining_place_type,
-                               o.option_id,
-                               c.category_code,
-                               c.category_name,
-                               o.option_name,
-                               case when sum(case when mi.food_id is not null then 1 else 0 end) > 0
-                                    then coalesce(sum(f.calories_kcal * mi.amount_g / 100), 0)
-                                    else coalesce(o.calories_kcal, 0)
-                               end as calories_kcal,
-                               case when sum(case when mi.food_id is not null then 1 else 0 end) > 0
-                                    then coalesce(sum(f.carb_g * mi.amount_g / 100), 0)
-                                    else coalesce(o.carb_g, 0)
-                               end as carb_g,
-                               case when sum(case when mi.food_id is not null then 1 else 0 end) > 0
-                                    then coalesce(sum(f.protein_g * mi.amount_g / 100), 0)
-                                    else coalesce(o.protein_g, 0)
-                               end as protein_g,
-                               case when sum(case when mi.food_id is not null then 1 else 0 end) > 0
-                                    then coalesce(sum(f.fat_g * mi.amount_g / 100), 0)
-                                    else coalesce(o.fat_g, 0)
-                               end as fat_g,
-                               case when sum(case when mi.food_id is not null then 1 else 0 end) > 0
-                                    then coalesce(sum(f.sugar_g * mi.amount_g / 100), 0)
-                                    else coalesce(o.sugar_g, 0)
-                               end as sugar_g,
-                               case when sum(case when mi.food_id is not null then 1 else 0 end) > 0
-                                    then coalesce(sum(f.sodium_mg * mi.amount_g / 100), 0)
-                                    else coalesce(o.sodium_mg, 0)
-                               end as sodium_mg
-                        from cafeteria_menu m
-                        join dining_place dp on dp.dining_place_id = m.dining_place_id
-                        join cafeteria_menu_option o on o.menu_id = m.menu_id
-                        left join menu_category c on c.category_id = o.category_id
-                        left join cafeteria_menu_item mi on mi.option_id = o.option_id
-                        left join food f on f.food_id = mi.food_id
-                        where dp.university_id = ?
-                          and m.served_date = ?
-                          and m.meal_type = ?
-                          and dp.is_active = true
-                          and o.is_available = true
-                        group by dp.dining_place_id,
-                                 dp.dining_place_name,
-                                 dp.dining_place_type,
-                                 o.option_id,
-                                 c.category_code,
-                                 c.category_name,
-                                 o.option_name,
-                                 c.sort_order,
-                                 o.calories_kcal,
-                                 o.carb_g,
-                                 o.protein_g,
-                                 o.fat_g,
-                                 o.sugar_g,
-                                 o.sodium_mg
-                        order by case when dp.dining_place_type = 'DORMITORY' then 0 else 1 end,
-                                 dp.dining_place_name,
-                                 c.sort_order,
-                                 o.option_name
+                        select dining_place_id,
+                               dining_place_name,
+                               dining_place_type,
+                               option_id,
+                               category_code,
+                               category_name,
+                               option_name,
+                               calories_kcal,
+                               carb_g,
+                               protein_g,
+                               fat_g,
+                               sugar_g,
+                               sodium_mg
+                        from v_menu_option_comparison
+                        where university_id = ?
+                          and served_date = ?
+                          and meal_type = ?
+                          and dining_place_is_active = true
+                          and is_available = true
+                        order by case when dining_place_type = 'DORMITORY' then 0 else 1 end,
+                                 dining_place_name,
+                                 category_sort_order,
+                                 option_name
                         """,
                 (rs, rowNum) -> new MenuOptionRow(
                         rs.getLong("dining_place_id"),

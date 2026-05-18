@@ -145,7 +145,6 @@ erDiagram
         varchar source_food_code
         varchar food_name
         decimal default_serving_g
-        varchar source_category
         decimal calories_kcal
         decimal carb_g
         decimal protein_g
@@ -229,6 +228,15 @@ erDiagram
         varchar reaction_note
     }
 ```
+
+## 식당 메뉴 비교용 조회 View
+
+식당 메뉴 비교 화면은 기본 테이블을 직접 모두 조인하지 않고 `v_menu_option_comparison` view를 읽는다. 저장 구조는 계속 정규화된 테이블을 기준으로 유지한다.
+
+- `cafeteria_menu`, `dining_place`, `cafeteria_menu_option`, `menu_category`는 학교/식당/날짜/끼니/옵션 정보를 분리해 저장한다.
+- `cafeteria_menu_item`은 옵션에 포함된 원문 메뉴 항목을 저장하고, 가능한 경우 `food`와 연결한다.
+- `food`는 표준 음식의 100g 기준 영양값만 저장한다.
+- `v_menu_option_comparison`은 비교 API가 쓰기 쉬운 읽기 전용 결과를 제공한다. 옵션 자체에 영양값이 있으면 그 값을 우선 사용하고, 없으면 메뉴 항목과 `food`를 조인해 옵션 단위 영양 합계를 계산한다.
 
 ## 핵심 제약
 
