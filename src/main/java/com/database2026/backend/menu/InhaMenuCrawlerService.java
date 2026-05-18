@@ -504,8 +504,7 @@ public class InhaMenuCrawlerService {
                 .trim();
         if (normalized.isBlank()
                 || normalized.contains("운영시간")
-                || normalized.contains("원산지")
-                || normalized.contains("알레르기")) {
+                || normalized.contains("원산지")) {
             return "";
         }
         if (normalized.length() > 255) {

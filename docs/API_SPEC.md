@@ -21,11 +21,8 @@
 | `MAIL_USERNAME` | `your-email@gmail.com` |
 | `MAIL_PASSWORD` | Gmail 앱 비밀번호 또는 SMTP 비밀번호 |
 | `MAIL_FROM` | `your-email@gmail.com` |
-| `MFDS_RAW_MATERIAL_SERVICE_KEY` | 식품 원재료 정보 API 인증키 |
-| `MFDS_PRODUCT_INGREDIENT_SERVICE_KEY` | 품목제조보고 원재료 API 인증키 |
 
 메일 설정이 없으면 인증코드 발급 API는 `MAIL_CONFIGURATION_REQUIRED` 오류를 반환한다.
-식약처 원재료 API 인증키는 로컬 전용 `application-local.properties`에 저장하고 GitHub에는 올리지 않는다.
 
 개발용 테스트 계정:
 
@@ -55,7 +52,7 @@
 
 `POST /auth/signup`
 
-이메일 도메인으로 대학교를 자동 판별한다. `inha.edu`, `inha.ac.kr`처럼 등록된 학교 이메일이면 학교 이메일 인증코드를 검증하고, 그 외 이메일은 일반 사용자로 가입한다. 키/현재 몸무게/목표 몸무게/성별/알레르기는 회원가입 이후 건강 프로필 입력 단계에서 저장한다.
+이메일 도메인으로 대학교를 자동 판별한다. `inha.edu`, `inha.ac.kr`처럼 등록된 학교 이메일이면 학교 이메일 인증코드를 검증하고, 그 외 이메일은 일반 사용자로 가입한다. 키/현재 몸무게/목표 몸무게/성별은 회원가입 이후 건강 프로필 입력 단계에서 저장한다.
 
 학교 이메일 회원가입은 학교 이메일 인증코드를 먼저 발급해야 한다.
 
@@ -129,13 +126,13 @@
 
 `DELETE /users/me`
 
-현재 로그인한 계정을 삭제한다. 삭제 시 계정, 토큰 무효화 기록, 건강 프로필, 학교 인증 정보, 식단 기록/항목, 알레르기 정보, 학교 이메일 인증코드를 함께 삭제한다.
+현재 로그인한 계정을 삭제한다. 삭제 시 계정, 토큰 무효화 기록, 건강 프로필, 학교 인증 정보, 식단 기록/항목, 학교 이메일 인증코드를 함께 삭제한다.
 
 ### 건강 프로필 수정
 
 `PUT /users/me/profile`
 
-회원가입 후 키/현재 몸무게/목표 몸무게/목표 기간/성별을 처음 입력하거나 수정하고 BMI를 다시 계산한다. 알레르기 정보는 같은 건강 프로필 영역에서 알레르기 API로 등록한다. `targetWeightKg`, `targetPeriodValue`, `targetPeriodUnit`은 선택 값이다. 목표 기간 값이 있고 단위를 생략하면 `MONTH`로 저장된다.
+회원가입 후 키/현재 몸무게/목표 몸무게/목표 기간/성별을 처음 입력하거나 수정하고 BMI를 다시 계산한다. `targetWeightKg`, `targetPeriodValue`, `targetPeriodUnit`은 선택 값이다. 목표 기간 값이 있고 단위를 생략하면 `MONTH`로 저장된다.
 
 ```json
 {
@@ -147,111 +144,6 @@
   "targetPeriodUnit": "MONTH"
 }
 ```
-
-### 내 알레르기 관리
-
-사용자는 음식 검색 결과의 `foodId` 또는 원재료 검색 결과의 `ingredientId`를 선택해 알레르기/주의 항목을 저장한다. 검색 결과가 없는 원재료는 `ingredientName`으로 직접 등록할 수 있다.
-
-음식 알레르기(`FOOD`)는 식단 항목의 `foodId`가 정확히 일치할 때 경고한다. 원재료 알레르기(`INGREDIENT`)는 메뉴명, 음식 원재료, 원재료 별칭과 매칭될 때 경고한다. 응답의 경고 문구는 동일하게 `"알레르기 항목이 포함되어 있을 수 있습니다. 섭취 전 원재료를 확인하세요."` 형식으로 내려간다.
-
-조회:
-
-`GET /users/me/allergies`
-
-추가:
-
-`POST /users/me/allergies`
-
-```json
-{
-  "allergyType": "FOOD",
-  "targetId": 3001,
-  "reactionNote": "먹으면 두드러기"
-}
-```
-
-```json
-{
-  "allergyType": "INGREDIENT",
-  "targetId": 1,
-  "reactionNote": "호박이 들어간 음식은 피해야 함"
-}
-```
-
-```json
-{
-  "allergyType": "INGREDIENT",
-  "ingredientName": "호박",
-  "reactionNote": "호박 알레르기"
-}
-```
-
-삭제:
-
-`DELETE /users/me/allergies/{allergyId}`
-
-응답 예시:
-
-```json
-{
-  "items": [
-    {
-      "allergyType": "FOOD",
-      "allergyId": 3,
-      "targetId": 3101,
-      "name": "라면",
-      "reactionNote": "주의"
-    },
-    {
-      "allergyType": "INGREDIENT",
-      "allergyId": 4,
-      "targetId": 2,
-      "name": "우유",
-      "reactionNote": "주의"
-    }
-  ]
-}
-```
-
-### 원재료 검색과 하위 호환 API
-
-원재료 검색:
-
-`GET /ingredients/search?q=호박&limit=20`
-
-로컬 원재료 DB를 먼저 검색하고, 식약처 식품 원재료 정보 API 키가 있으면 외부 API 결과를 DB에 캐싱한 뒤 반환한다. 우유, 계란, 땅콩 같은 법정 알레르기 가능 재료도 별도 법정 알레르기 테이블이 아니라 `ingredient`/`ingredient_alias`에 포함된다.
-
-기존 원재료 알레르기 API는 하위 호환용으로 유지한다. 내부 저장 테이블은 `/users/me/allergies`와 같은 `user_allergy`이고, `allergyType=INGREDIENT` 항목만 처리한다.
-
-여러 원재료를 선택한 뒤 한 번에 등록:
-
-`POST /users/me/ingredient-allergies/bulk`
-
-```json
-{
-  "items": [
-    {
-      "ingredientId": 1,
-      "reactionNote": "우유 알레르기"
-    },
-    {
-      "ingredientName": "호박",
-      "reactionNote": "호박 알레르기"
-    },
-    {
-      "ingredientName": "땅콩"
-    }
-  ]
-}
-```
-
-조회:
-
-`GET /users/me/ingredient-allergies`
-
-삭제:
-
-`DELETE /users/me/ingredient-allergies/{allergyId}`
 
 ## 3. 학교/식당/메뉴
 
@@ -292,25 +184,6 @@
 이 경우 응답은 같은 날짜/끼니의 생활관식당 옵션들과 사용자가 선택한 학생식당 옵션만 포함한다. `studentOptionId`를 생략하면 기존처럼 해당 날짜/끼니의 모든 식당 옵션을 내려준다.
 
 식당 메뉴 원문은 `food` 마스터에 저장하지 않는다. 메뉴 항목이 식약처 음식과 아직 매핑되지 않은 경우 해당 항목의 영양값은 0으로 계산되고, 원문 메뉴명은 메뉴 옵션/항목에 남는다.
-
-사용자가 원재료 알레르기를 등록했다면 각 메뉴 옵션의 `allergyWarnings`에 추정 경고가 포함된다.
-
-```json
-{
-  "optionId": 2021,
-  "optionName": "호박죽 / 쌀밥 / 배추김치",
-  "nutrients": {},
-  "allergyWarnings": [
-    {
-      "warningType": "POSSIBLE_INGREDIENT_NAME_MATCH",
-      "allergyName": "호박",
-      "matchedText": "호박죽",
-      "source": "USER_INPUT",
-      "message": "호박 원재료가 포함되어 있을 가능성이 있습니다."
-    }
-  ]
-}
-```
 
 ### 인하대 학생식당 메뉴 크롤링
 
@@ -357,18 +230,6 @@ DB에 저장된 전국통합식품영양성분정보 표준데이터 음식 마�
 `GET /foods/{foodId}`
 
 기본 제공량 기준 영양 정보를 반환한다.
-
-### 음식 원재료 조회/동기화
-
-캐싱된 원재료 조회:
-
-`GET /foods/{foodId}/ingredients`
-
-품목제조보고 원재료 API를 호출해 원재료 캐싱:
-
-`POST /foods/{foodId}/ingredients/sync`
-
-식약처 음식명으로 품목제조보고 원재료 API(C002)를 검색하고, 반환된 원재료를 `ingredient`, `food_ingredient`에 저장한다.
 
 ## 5. 식단 기록
 

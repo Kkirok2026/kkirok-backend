@@ -93,15 +93,6 @@ class ServiceFlowIntegrationTests {
         JsonNode customSearch = getOkWithParams("/api/v1/foods/search", token, "q", "저 지방우 유", "limit", "5");
         assertThat(customSearch.at("/data/items/0/foodId").asLong()).isEqualTo(customFoodId);
 
-        JsonNode allergies = postOk("/api/v1/users/me/allergies", token, """
-                {
-                  "allergyType": "INGREDIENT",
-                  "ingredientName": "우유",
-                  "reactionNote": "테스트"
-                }
-                """);
-        assertThat(allergies.at("/data/items").size()).isGreaterThan(0);
-
         JsonNode mealLog = postCreated("/api/v1/meal-logs", token, """
                 {
                   "logDate": "2026-05-13",
@@ -126,7 +117,6 @@ class ServiceFlowIntegrationTests {
                 }
                 """.formatted(customFoodId));
         assertThat(addedFoods.at("/data/items").size()).isEqualTo(2);
-        assertThat(addedFoods.at("/data/items/1/allergyWarnings").size()).isGreaterThan(0);
         assertThat(addedFoods.at("/data/totals/caloriesKcal").decimalValue()).isGreaterThan(BigDecimal.ZERO);
         long firstMealLogItemId = addedFoods.at("/data/items/0/mealLogItemId").asLong();
 
@@ -233,6 +223,20 @@ class ServiceFlowIntegrationTests {
                 "실곤약콩나물무침",
                 "깍두기"
         );
+    }
+
+    @Test
+    void migrationSplitsSeededCompositeMenuItems() {
+        List<String> rawItems = jdbcTemplate.query("""
+                        select mi.raw_item_name
+                        from cafeteria_menu_item mi
+                        join cafeteria_menu_option o on o.option_id = mi.option_id
+                        where o.option_name = '단호박콘샐러드 / 옥수수수염차'
+                        order by mi.menu_item_id
+                        """,
+                (rs, rowNum) -> rs.getString("raw_item_name")
+        );
+        assertThat(rawItems).containsExactly("단호박콘샐러드", "옥수수수염차");
     }
 
     private void seedStudentMenuOptionForComparison() {

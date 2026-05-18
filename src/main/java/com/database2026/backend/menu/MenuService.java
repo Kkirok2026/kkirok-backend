@@ -7,7 +7,6 @@ import com.database2026.backend.menu.MenuDtos.DiningPlaceItem;
 import com.database2026.backend.menu.MenuDtos.DiningPlaceListResponse;
 import com.database2026.backend.menu.MenuDtos.DiningPlaceMenu;
 import com.database2026.backend.menu.MenuDtos.MenuCompareResponse;
-import com.database2026.backend.menu.MenuDtos.MenuAllergyWarning;
 import com.database2026.backend.menu.MenuDtos.MenuOptionCompareItem;
 import com.database2026.backend.menu.MenuDtos.MenuOptionSummary;
 import com.database2026.backend.menu.MenuDtos.UniversityItem;
@@ -15,11 +14,9 @@ import com.database2026.backend.menu.MenuDtos.UniversityListResponse;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -29,8 +26,6 @@ import org.springframework.stereotype.Service;
 public class MenuService {
 
     private static final Logger log = LoggerFactory.getLogger(MenuService.class);
-    private static final String ALLERGY_WARNING_MESSAGE =
-            "%s 알레르기 항목이 포함되어 있을 수 있습니다. 섭취 전 원재료를 확인하세요.";
 
     private final JdbcTemplate jdbcTemplate;
     private final InhaMenuCrawlerService inhaMenuCrawlerService;
@@ -127,8 +122,7 @@ public class MenuService {
                         row.categoryCode(),
                         row.categoryName(),
                         row.optionName(),
-                        row.nutrients(),
-                        allergyWarnings(userId, row.optionId())
+                        row.nutrients()
                 ))
                 .toList();
         return new MenuCompareResponse(universityId, date, mealTypeCode, studentOptionId, items);
@@ -287,166 +281,6 @@ public class MenuService {
         return normalized;
     }
 
-    private List<MenuAllergyWarning> allergyWarnings(long userId, long optionId) {
-        List<MenuItemForWarning> menuItems = jdbcTemplate.query("""
-                        select mi.food_id, mi.raw_item_name
-                        from cafeteria_menu_item mi
-                        where mi.option_id = ?
-                        order by mi.menu_item_id
-                        """,
-                (rs, rowNum) -> new MenuItemForWarning(
-                        rs.getObject("food_id", Long.class),
-                        rs.getString("raw_item_name")
-                ),
-                optionId
-        );
-        if (menuItems.isEmpty()) {
-            return List.of();
-        }
-
-        Map<String, MenuAllergyWarning> warnings = new LinkedHashMap<>();
-        List<UserFoodAllergy> foodAllergies = userFoodAllergies(userId);
-        List<UserIngredientKeyword> ingredientKeywords = userIngredientKeywords(userId);
-
-        for (MenuItemForWarning item : menuItems) {
-            for (UserFoodAllergy allergy : foodAllergies) {
-                if (item.foodId() != null && item.foodId().equals(allergy.foodId())) {
-                    addWarning(warnings, new MenuAllergyWarning(
-                            "FOOD_MATCH",
-                            allergy.foodName(),
-                            item.rawItemName(),
-                            "FOOD",
-                            allergyWarningMessage(allergy.foodName())
-                    ));
-                }
-            }
-
-            String normalizedRawName = normalizeForMatch(item.rawItemName());
-            for (UserIngredientKeyword keyword : ingredientKeywords) {
-                if (!keyword.normalizedKeyword().isBlank() && normalizedRawName.contains(keyword.normalizedKeyword())) {
-                    addWarning(warnings, new MenuAllergyWarning(
-                            "POSSIBLE_INGREDIENT_NAME_MATCH",
-                            keyword.allergyName(),
-                            item.rawItemName(),
-                            keyword.source(),
-                            allergyWarningMessage(keyword.allergyName())
-                    ));
-                }
-            }
-
-            if (item.foodId() != null) {
-                for (FoodIngredientMatch match : foodIngredientMatches(userId, item.foodId())) {
-                    addWarning(warnings, new MenuAllergyWarning(
-                            "FOOD_INGREDIENT_MATCH",
-                            match.allergyName(),
-                            match.ingredientName(),
-                            "FOOD_INGREDIENT",
-                            allergyWarningMessage(match.allergyName())
-                    ));
-                }
-            }
-        }
-        return List.copyOf(warnings.values());
-    }
-
-    private List<UserFoodAllergy> userFoodAllergies(long userId) {
-        return jdbcTemplate.query("""
-                        select a.food_id, f.food_name
-                        from user_allergy a
-                        join food f on f.food_id = a.food_id
-                        where a.user_id = ?
-                          and a.allergy_type = 'FOOD'
-                        """,
-                (rs, rowNum) -> new UserFoodAllergy(rs.getLong("food_id"), rs.getString("food_name")),
-                userId
-        );
-    }
-
-    private List<UserIngredientKeyword> userIngredientKeywords(long userId) {
-        Set<UserIngredientKeyword> keywords = new LinkedHashSet<>();
-        keywords.addAll(jdbcTemplate.query("""
-                        select allergy_name, normalized_allergy_name as keyword, 'USER_INPUT' as source
-                        from user_allergy
-                        where user_id = ?
-                          and allergy_type = 'INGREDIENT'
-                        """,
-                (rs, rowNum) -> new UserIngredientKeyword(
-                        rs.getString("allergy_name"),
-                        rs.getString("keyword"),
-                        rs.getString("source")
-                ),
-                userId
-        ));
-        keywords.addAll(jdbcTemplate.query("""
-                        select uia.allergy_name, i.normalized_name as keyword, 'INGREDIENT' as source
-                        from user_allergy uia
-                        join ingredient i on i.ingredient_id = uia.ingredient_id
-                        where uia.user_id = ?
-                          and uia.allergy_type = 'INGREDIENT'
-                        """,
-                (rs, rowNum) -> new UserIngredientKeyword(
-                        rs.getString("allergy_name"),
-                        rs.getString("keyword"),
-                        rs.getString("source")
-                ),
-                userId
-        ));
-        keywords.addAll(jdbcTemplate.query("""
-                        select uia.allergy_name, ia.normalized_alias as keyword, 'INGREDIENT_ALIAS' as source
-                        from user_allergy uia
-                        join ingredient_alias ia on ia.ingredient_id = uia.ingredient_id
-                        where uia.user_id = ?
-                          and uia.allergy_type = 'INGREDIENT'
-                        """,
-                (rs, rowNum) -> new UserIngredientKeyword(
-                        rs.getString("allergy_name"),
-                        rs.getString("keyword"),
-                        rs.getString("source")
-                ),
-                userId
-        ));
-        return List.copyOf(keywords);
-    }
-
-    private List<FoodIngredientMatch> foodIngredientMatches(long userId, long foodId) {
-        return jdbcTemplate.query("""
-                        select distinct uia.allergy_name, i.ingredient_name
-                        from user_allergy uia
-                        join food_ingredient fi on fi.ingredient_id = uia.ingredient_id
-                        join ingredient i on i.ingredient_id = fi.ingredient_id
-                        where uia.user_id = ?
-                          and uia.allergy_type = 'INGREDIENT'
-                          and fi.food_id = ?
-                        """,
-                (rs, rowNum) -> new FoodIngredientMatch(
-                        rs.getString("allergy_name"),
-                        rs.getString("ingredient_name")
-                ),
-                userId,
-                foodId
-        );
-    }
-
-    private String allergyWarningMessage(String allergyName) {
-        return ALLERGY_WARNING_MESSAGE.formatted(allergyName);
-    }
-
-    private void addWarning(Map<String, MenuAllergyWarning> warnings, MenuAllergyWarning warning) {
-        warnings.putIfAbsent(
-                warning.warningType() + "|" + warning.allergyName() + "|" + warning.matchedText(),
-                warning
-        );
-    }
-
-    private String normalizeForMatch(String value) {
-        if (value == null) {
-            return "";
-        }
-        return value.trim()
-                .toLowerCase(Locale.ROOT)
-                .replaceAll("[\\s_\\-()\\[\\]{}]", "");
-    }
-
     private record MenuOptionRow(
             Long diningPlaceId,
             String diningPlaceName,
@@ -468,18 +302,6 @@ public class MenuService {
         DiningPlaceAccumulator(Long diningPlaceId, String diningPlaceName, String diningPlaceType) {
             this(diningPlaceId, diningPlaceName, diningPlaceType, new ArrayList<>());
         }
-    }
-
-    private record MenuItemForWarning(Long foodId, String rawItemName) {
-    }
-
-    private record UserFoodAllergy(Long foodId, String foodName) {
-    }
-
-    private record UserIngredientKeyword(String allergyName, String normalizedKeyword, String source) {
-    }
-
-    private record FoodIngredientMatch(String allergyName, String ingredientName) {
     }
 
     private record UserUniversity(Long universityId) {

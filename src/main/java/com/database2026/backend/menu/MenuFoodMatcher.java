@@ -50,7 +50,7 @@ public class MenuFoodMatcher {
 
     private void splitCompositeMenuItems(long universityId, LocalDate date, String mealTypeCode) {
         for (CompositeMenuItemRow item : compositeMenuItems(universityId, date, mealTypeCode)) {
-            List<String> splitItems = splitMenuItems(item.optionName());
+            List<String> splitItems = splitMenuItems(item.rawItemName());
             if (splitItems.size() <= 1) {
                 continue;
             }
@@ -140,8 +140,8 @@ public class MenuFoodMatcher {
     private List<CompositeMenuItemRow> compositeMenuItems(long universityId, LocalDate date, String mealTypeCode) {
         return jdbcTemplate.query("""
                         select o.option_id,
-                               o.option_name,
-                               min(mi.menu_item_id) as menu_item_id
+                               min(mi.menu_item_id) as menu_item_id,
+                               min(mi.raw_item_name) as raw_item_name
                         from cafeteria_menu_item mi
                         join cafeteria_menu_option o on o.option_id = mi.option_id
                         join cafeteria_menu m on m.menu_id = o.menu_id
@@ -151,15 +151,14 @@ public class MenuFoodMatcher {
                           and o.is_available = true
                           and m.served_date = ?
                           and m.meal_type = ?
-                        group by o.option_id, o.option_name
+                        group by o.option_id
                         having count(*) = 1
-                           and min(mi.raw_item_name) = o.option_name
                         order by o.option_id
                         """,
                 (rs, rowNum) -> new CompositeMenuItemRow(
                         rs.getLong("option_id"),
-                        rs.getString("option_name"),
-                        rs.getLong("menu_item_id")
+                        rs.getLong("menu_item_id"),
+                        rs.getString("raw_item_name")
                 ),
                 universityId,
                 date,
@@ -215,6 +214,6 @@ public class MenuFoodMatcher {
     private record MenuItemRow(long menuItemId, String rawItemName) {
     }
 
-    private record CompositeMenuItemRow(long optionId, String optionName, long menuItemId) {
+    private record CompositeMenuItemRow(long optionId, long menuItemId, String rawItemName) {
     }
 }

@@ -74,17 +74,7 @@ public final class MenuDtos {
             String categoryCode,
             String categoryName,
             String optionName,
-            NutrientTotals nutrients,
-            List<MenuAllergyWarning> allergyWarnings
-    ) {
-    }
-
-    public record MenuAllergyWarning(
-            String warningType,
-            String allergyName,
-            String matchedText,
-            String source,
-            String message
+            NutrientTotals nutrients
     ) {
     }
 }

@@ -65,17 +65,7 @@ public final class MealDtos {
             String itemName,
             BigDecimal amountG,
             Boolean excluded,
-            NutrientTotals nutrients,
-            List<MealAllergyWarning> allergyWarnings
-    ) {
-    }
-
-    public record MealAllergyWarning(
-            String warningType,
-            String allergyName,
-            String matchedText,
-            String source,
-            String message
+            NutrientTotals nutrients
     ) {
     }
 

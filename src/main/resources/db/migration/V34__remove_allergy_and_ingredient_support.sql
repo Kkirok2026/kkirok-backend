@@ -1,0 +1,9 @@
+drop table if exists user_allergy;
+drop table if exists user_ingredient_allergy;
+drop table if exists user_food_allergy;
+drop table if exists food_ingredient;
+drop table if exists ingredient_alias;
+drop table if exists ingredient_allergen;
+drop table if exists allergen_keyword;
+drop table if exists allergen;
+drop table if exists ingredient;

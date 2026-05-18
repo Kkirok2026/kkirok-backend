@@ -6,7 +6,6 @@ import com.database2026.backend.meal.MealDtos.DailySummaryResponse;
 import com.database2026.backend.meal.MealDtos.FoodMealLogItemRequest;
 import com.database2026.backend.meal.MealDtos.FoodMealLogItemsAddRequest;
 import com.database2026.backend.meal.MealDtos.MacroEnergyRatio;
-import com.database2026.backend.meal.MealDtos.MealAllergyWarning;
 import com.database2026.backend.meal.MealDtos.MealLogCreateRequest;
 import com.database2026.backend.meal.MealDtos.MealLogItemResponse;
 import com.database2026.backend.meal.MealDtos.MealLogListResponse;
@@ -19,13 +18,9 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -36,8 +31,6 @@ public class MealService {
 
     private static final String DEFAULT_ACTIVITY_LEVEL = "LOW_ACTIVE";
     private static final BigDecimal SODIUM_MAX_MG = BigDecimal.valueOf(2300);
-    private static final String ALLERGY_WARNING_MESSAGE =
-            "%s 알레르기 항목이 포함되어 있을 수 있습니다. 섭취 전 원재료를 확인하세요.";
     private static final String TARGET_BASIS =
             "IOM DRI 성인 EER 공식 + 2025 한국인 영양소 섭취기준 에너지 적정비율"
                     + "(탄수화물 50-65%, 단백질 10-20%, 지방 15-30%, 총당류 20% 이내)";
@@ -370,151 +363,11 @@ public class MealService {
                             itemName,
                             rs.getBigDecimal("amount_g"),
                             rs.getBoolean("is_excluded"),
-                            NutrientTotals.from(rs),
-                            allergyWarnings(userId, foodId, itemName)
+                            NutrientTotals.from(rs)
                     );
                 },
                 mealLogId
         );
-    }
-
-    private List<MealAllergyWarning> allergyWarnings(long userId, Long foodId, String itemName) {
-        Map<String, MealAllergyWarning> warnings = new LinkedHashMap<>();
-        for (UserFoodAllergy allergy : userFoodAllergies(userId)) {
-            if (foodId != null && foodId.equals(allergy.foodId())) {
-                addAllergyWarning(warnings, new MealAllergyWarning(
-                        "FOOD_MATCH",
-                        allergy.foodName(),
-                        itemName,
-                        "FOOD",
-                        allergyWarningMessage(allergy.foodName())
-                ));
-            }
-        }
-
-        String normalizedItemName = normalizeForAllergyMatch(itemName);
-        for (UserIngredientKeyword keyword : userIngredientKeywords(userId)) {
-            if (!keyword.normalizedKeyword().isBlank() && normalizedItemName.contains(keyword.normalizedKeyword())) {
-                addAllergyWarning(warnings, new MealAllergyWarning(
-                        "POSSIBLE_INGREDIENT_NAME_MATCH",
-                        keyword.allergyName(),
-                        itemName,
-                        keyword.source(),
-                        allergyWarningMessage(keyword.allergyName())
-                ));
-            }
-        }
-
-        if (foodId != null) {
-            for (FoodIngredientMatch match : foodIngredientMatches(userId, foodId)) {
-                addAllergyWarning(warnings, new MealAllergyWarning(
-                        "FOOD_INGREDIENT_MATCH",
-                        match.allergyName(),
-                        match.ingredientName(),
-                        "FOOD_INGREDIENT",
-                        allergyWarningMessage(match.allergyName())
-                ));
-            }
-        }
-        return List.copyOf(warnings.values());
-    }
-
-    private List<UserFoodAllergy> userFoodAllergies(long userId) {
-        return jdbcTemplate.query("""
-                        select a.food_id, f.food_name
-                        from user_allergy a
-                        join food f on f.food_id = a.food_id
-                        where a.user_id = ?
-                          and a.allergy_type = 'FOOD'
-                        """,
-                (rs, rowNum) -> new UserFoodAllergy(rs.getLong("food_id"), rs.getString("food_name")),
-                userId
-        );
-    }
-
-    private List<UserIngredientKeyword> userIngredientKeywords(long userId) {
-        Set<UserIngredientKeyword> keywords = new LinkedHashSet<>();
-        keywords.addAll(jdbcTemplate.query("""
-                        select allergy_name, normalized_allergy_name as keyword, 'USER_INPUT' as source
-                        from user_allergy
-                        where user_id = ?
-                          and allergy_type = 'INGREDIENT'
-                        """,
-                (rs, rowNum) -> new UserIngredientKeyword(
-                        rs.getString("allergy_name"),
-                        rs.getString("keyword"),
-                        rs.getString("source")
-                ),
-                userId
-        ));
-        keywords.addAll(jdbcTemplate.query("""
-                        select uia.allergy_name, i.normalized_name as keyword, 'INGREDIENT' as source
-                        from user_allergy uia
-                        join ingredient i on i.ingredient_id = uia.ingredient_id
-                        where uia.user_id = ?
-                          and uia.allergy_type = 'INGREDIENT'
-                        """,
-                (rs, rowNum) -> new UserIngredientKeyword(
-                        rs.getString("allergy_name"),
-                        rs.getString("keyword"),
-                        rs.getString("source")
-                ),
-                userId
-        ));
-        keywords.addAll(jdbcTemplate.query("""
-                        select uia.allergy_name, ia.normalized_alias as keyword, 'INGREDIENT_ALIAS' as source
-                        from user_allergy uia
-                        join ingredient_alias ia on ia.ingredient_id = uia.ingredient_id
-                        where uia.user_id = ?
-                          and uia.allergy_type = 'INGREDIENT'
-                        """,
-                (rs, rowNum) -> new UserIngredientKeyword(
-                        rs.getString("allergy_name"),
-                        rs.getString("keyword"),
-                        rs.getString("source")
-                ),
-                userId
-        ));
-        return List.copyOf(keywords);
-    }
-
-    private List<FoodIngredientMatch> foodIngredientMatches(long userId, long foodId) {
-        return jdbcTemplate.query("""
-                        select distinct uia.allergy_name, i.ingredient_name
-                        from user_allergy uia
-                        join food_ingredient fi on fi.ingredient_id = uia.ingredient_id
-                        join ingredient i on i.ingredient_id = fi.ingredient_id
-                        where uia.user_id = ?
-                          and uia.allergy_type = 'INGREDIENT'
-                          and fi.food_id = ?
-                        """,
-                (rs, rowNum) -> new FoodIngredientMatch(
-                        rs.getString("allergy_name"),
-                        rs.getString("ingredient_name")
-                ),
-                userId,
-                foodId
-        );
-    }
-
-    private String allergyWarningMessage(String allergyName) {
-        return ALLERGY_WARNING_MESSAGE.formatted(allergyName);
-    }
-
-    private void addAllergyWarning(Map<String, MealAllergyWarning> warnings, MealAllergyWarning warning) {
-        warnings.putIfAbsent(
-                warning.warningType() + "|" + warning.allergyName() + "|" + warning.matchedText(),
-                warning
-        );
-    }
-
-    private String normalizeForAllergyMatch(String value) {
-        if (value == null) {
-            return "";
-        }
-        return value.trim()
-                .toLowerCase(Locale.ROOT)
-                .replaceAll("[\\s_\\-()\\[\\]{}]", "");
     }
 
     private NutrientTotals entryTotals(long mealLogId) {
@@ -899,15 +752,6 @@ public class MealService {
     }
 
     private record CafeteriaMenuItem(Long foodId, String rawItemName, BigDecimal amountG) {
-    }
-
-    private record UserFoodAllergy(Long foodId, String foodName) {
-    }
-
-    private record UserIngredientKeyword(String allergyName, String normalizedKeyword, String source) {
-    }
-
-    private record FoodIngredientMatch(String allergyName, String ingredientName) {
     }
 
     private record UserUniversity(Long universityId) {
