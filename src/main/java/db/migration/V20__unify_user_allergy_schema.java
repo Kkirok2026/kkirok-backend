@@ -283,9 +283,11 @@ public class V20__unify_user_allergy_schema extends BaseJavaMigration {
         try (PreparedStatement statement = connection.prepareStatement("""
                 select count(*)
                 from information_schema.tables
-                where lower(table_name) = ?
+                where lower(table_schema) = ?
+                  and lower(table_name) = ?
                 """)) {
-            statement.setString(1, tableName.toLowerCase(Locale.ROOT));
+            statement.setString(1, informationSchemaName(connection));
+            statement.setString(2, tableName.toLowerCase(Locale.ROOT));
             try (ResultSet resultSet = statement.executeQuery()) {
                 resultSet.next();
                 return resultSet.getInt(1) > 0;
@@ -298,23 +300,34 @@ public class V20__unify_user_allergy_schema extends BaseJavaMigration {
                 ? """
                   select count(*)
                   from information_schema.indexes
-                  where lower(table_name) = ?
+                  where lower(table_schema) = ?
+                    and lower(table_name) = ?
                     and lower(index_name) = ?
                   """
                 : """
                   select count(*)
                   from information_schema.statistics
-                  where lower(table_name) = ?
+                  where lower(table_schema) = ?
+                    and lower(table_name) = ?
                     and lower(index_name) = ?
                   """;
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setString(1, tableName.toLowerCase(Locale.ROOT));
-            statement.setString(2, indexName.toLowerCase(Locale.ROOT));
+            statement.setString(1, informationSchemaName(connection));
+            statement.setString(2, tableName.toLowerCase(Locale.ROOT));
+            statement.setString(3, indexName.toLowerCase(Locale.ROOT));
             try (ResultSet resultSet = statement.executeQuery()) {
                 resultSet.next();
                 return resultSet.getInt(1) > 0;
             }
         }
+    }
+
+    private String informationSchemaName(Connection connection) throws SQLException {
+        String schema = connection.getSchema();
+        if (schema != null && !schema.isBlank()) {
+            return schema.toLowerCase(Locale.ROOT);
+        }
+        return connection.getCatalog().toLowerCase(Locale.ROOT);
     }
 
     private String normalize(String value) {

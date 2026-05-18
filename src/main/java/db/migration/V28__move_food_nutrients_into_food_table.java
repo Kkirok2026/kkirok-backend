@@ -97,9 +97,11 @@ public class V28__move_food_nutrients_into_food_table extends BaseJavaMigration 
         try (PreparedStatement statement = connection.prepareStatement("""
                 select count(*)
                 from information_schema.tables
-                where lower(table_name) = ?
+                where lower(table_schema) = ?
+                  and lower(table_name) = ?
                 """)) {
-            statement.setString(1, tableName.toLowerCase(Locale.ROOT));
+            statement.setString(1, informationSchemaName(connection));
+            statement.setString(2, tableName.toLowerCase(Locale.ROOT));
             try (ResultSet resultSet = statement.executeQuery()) {
                 resultSet.next();
                 return resultSet.getInt(1) > 0;
@@ -111,16 +113,26 @@ public class V28__move_food_nutrients_into_food_table extends BaseJavaMigration 
         try (PreparedStatement statement = connection.prepareStatement("""
                 select count(*)
                 from information_schema.columns
-                where lower(table_name) = ?
+                where lower(table_schema) = ?
+                  and lower(table_name) = ?
                   and lower(column_name) = ?
                 """)) {
-            statement.setString(1, tableName.toLowerCase(Locale.ROOT));
-            statement.setString(2, columnName.toLowerCase(Locale.ROOT));
+            statement.setString(1, informationSchemaName(connection));
+            statement.setString(2, tableName.toLowerCase(Locale.ROOT));
+            statement.setString(3, columnName.toLowerCase(Locale.ROOT));
             try (ResultSet resultSet = statement.executeQuery()) {
                 resultSet.next();
                 return resultSet.getInt(1) > 0;
             }
         }
+    }
+
+    private String informationSchemaName(Connection connection) throws SQLException {
+        String schema = connection.getSchema();
+        if (schema != null && !schema.isBlank()) {
+            return schema.toLowerCase(Locale.ROOT);
+        }
+        return connection.getCatalog().toLowerCase(Locale.ROOT);
     }
 
     private void execute(Connection connection, String sql) throws SQLException {

@@ -234,13 +234,16 @@ public class V19__simplify_account_and_meal_log_schema extends BaseJavaMigration
             from information_schema.key_column_usage k
             join information_schema.table_constraints t
               on t.constraint_schema = k.constraint_schema
+             and t.table_schema = k.table_schema
              and t.constraint_name = k.constraint_name
              and t.table_name = k.table_name
-            where lower(k.table_name) = ?
+            where lower(k.table_schema) = ?
+              and lower(k.table_name) = ?
               and lower(k.column_name) in (%s)
               and t.constraint_type = 'UNIQUE'
             """.formatted(placeholders(columnNames.size())))) {
             int index = 1;
+            statement.setString(index++, informationSchemaName(connection));
             statement.setString(index++, tableName.toLowerCase(Locale.ROOT));
             for (String columnName : columnNames) {
                 statement.setString(index++, columnName.toLowerCase(Locale.ROOT));
@@ -301,9 +304,11 @@ public class V19__simplify_account_and_meal_log_schema extends BaseJavaMigration
         try (PreparedStatement statement = connection.prepareStatement("""
             select count(*)
             from information_schema.tables
-            where lower(table_name) = ?
+            where lower(table_schema) = ?
+              and lower(table_name) = ?
             """)) {
-            statement.setString(1, tableName.toLowerCase(Locale.ROOT));
+            statement.setString(1, informationSchemaName(connection));
+            statement.setString(2, tableName.toLowerCase(Locale.ROOT));
             try (ResultSet resultSet = statement.executeQuery()) {
                 resultSet.next();
                 return resultSet.getInt(1) > 0;
@@ -315,11 +320,13 @@ public class V19__simplify_account_and_meal_log_schema extends BaseJavaMigration
         try (PreparedStatement statement = connection.prepareStatement("""
             select count(*)
             from information_schema.columns
-            where lower(table_name) = ?
+            where lower(table_schema) = ?
+              and lower(table_name) = ?
               and lower(column_name) = ?
             """)) {
-            statement.setString(1, tableName.toLowerCase(Locale.ROOT));
-            statement.setString(2, columnName.toLowerCase(Locale.ROOT));
+            statement.setString(1, informationSchemaName(connection));
+            statement.setString(2, tableName.toLowerCase(Locale.ROOT));
+            statement.setString(3, columnName.toLowerCase(Locale.ROOT));
             try (ResultSet resultSet = statement.executeQuery()) {
                 resultSet.next();
                 return resultSet.getInt(1) > 0;
@@ -331,11 +338,13 @@ public class V19__simplify_account_and_meal_log_schema extends BaseJavaMigration
         try (PreparedStatement statement = connection.prepareStatement("""
             select count(*)
             from information_schema.table_constraints
-            where lower(table_name) = ?
+            where lower(table_schema) = ?
+              and lower(table_name) = ?
               and lower(constraint_name) = ?
             """)) {
-            statement.setString(1, tableName.toLowerCase(Locale.ROOT));
-            statement.setString(2, constraintName.toLowerCase(Locale.ROOT));
+            statement.setString(1, informationSchemaName(connection));
+            statement.setString(2, tableName.toLowerCase(Locale.ROOT));
+            statement.setString(3, constraintName.toLowerCase(Locale.ROOT));
             try (ResultSet resultSet = statement.executeQuery()) {
                 resultSet.next();
                 return resultSet.getInt(1) > 0;
@@ -348,18 +357,21 @@ public class V19__simplify_account_and_meal_log_schema extends BaseJavaMigration
                 ? """
                   select count(*)
                   from information_schema.indexes
-                  where lower(table_name) = ?
+                  where lower(table_schema) = ?
+                    and lower(table_name) = ?
                     and lower(index_name) = ?
                   """
                 : """
                   select count(*)
                   from information_schema.statistics
-                  where lower(table_name) = ?
+                  where lower(table_schema) = ?
+                    and lower(table_name) = ?
                     and lower(index_name) = ?
                   """;
         try (PreparedStatement statement = connection.prepareStatement(sql)) {
-            statement.setString(1, tableName.toLowerCase(Locale.ROOT));
-            statement.setString(2, indexName.toLowerCase(Locale.ROOT));
+            statement.setString(1, informationSchemaName(connection));
+            statement.setString(2, tableName.toLowerCase(Locale.ROOT));
+            statement.setString(3, indexName.toLowerCase(Locale.ROOT));
             try (ResultSet resultSet = statement.executeQuery()) {
                 resultSet.next();
                 return resultSet.getInt(1) > 0;
@@ -369,6 +381,14 @@ public class V19__simplify_account_and_meal_log_schema extends BaseJavaMigration
 
     private String quoteMysqlIdentifier(String identifier) {
         return "`" + identifier.replace("`", "``") + "`";
+    }
+
+    private String informationSchemaName(Connection connection) throws SQLException {
+        String schema = connection.getSchema();
+        if (schema != null && !schema.isBlank()) {
+            return schema.toLowerCase(Locale.ROOT);
+        }
+        return connection.getCatalog().toLowerCase(Locale.ROOT);
     }
 
     private String placeholders(int size) {
