@@ -6,7 +6,7 @@ create table tmp_inha_student_seed (
     category_code varchar(50) not null,
     option_name varchar(255) not null,
     source_label varchar(255) not null
-) character set utf8mb4 collate utf8mb4_unicode_ci;
+);
 
 insert into tmp_inha_student_seed (served_date, meal_type, category_code, option_name, source_label) values
     ('2026-05-11', 'LUNCH', 'STUDENT_HANSANG', '제육덮밥 / 미역국 / 어묵볶음 / 단무지 / 배추김치', '2026-05-11 학생식당 한상한담'),
@@ -58,22 +58,22 @@ from (
     from tmp_inha_student_seed
 ) s
 join dining_place dp
-  on dp.dining_place_name = '인하대학교 학생식당'
- and dp.dining_place_type = 'STUDENT'
+  on dp.dining_place_name collate utf8mb4_unicode_ci = '인하대학교 학생식당' collate utf8mb4_unicode_ci
+ and dp.dining_place_type collate utf8mb4_unicode_ci = 'STUDENT' collate utf8mb4_unicode_ci
 on duplicate key update menu_id = menu_id;
 
 insert into cafeteria_menu_option (menu_id, category_id, option_name, source_label, is_available)
 select m.menu_id, c.category_id, s.option_name, s.source_label, true
 from tmp_inha_student_seed s
 join dining_place dp
-  on dp.dining_place_name = '인하대학교 학생식당'
- and dp.dining_place_type = 'STUDENT'
+  on dp.dining_place_name collate utf8mb4_unicode_ci = '인하대학교 학생식당' collate utf8mb4_unicode_ci
+ and dp.dining_place_type collate utf8mb4_unicode_ci = 'STUDENT' collate utf8mb4_unicode_ci
 join cafeteria_menu m
   on m.dining_place_id = dp.dining_place_id
  and m.served_date = s.served_date
- and m.meal_type = s.meal_type
+ and m.meal_type collate utf8mb4_unicode_ci = s.meal_type collate utf8mb4_unicode_ci
 join menu_category c
-  on c.category_code = s.category_code
+  on c.category_code collate utf8mb4_unicode_ci = s.category_code collate utf8mb4_unicode_ci
 on duplicate key update
     category_id = values(category_id),
     source_label = values(source_label),
@@ -83,18 +83,18 @@ insert into cafeteria_menu_item (option_id, food_id, raw_item_name, amount_g)
 select o.option_id, null, s.option_name, 100.00
 from tmp_inha_student_seed s
 join dining_place dp
-  on dp.dining_place_name = '인하대학교 학생식당'
- and dp.dining_place_type = 'STUDENT'
+  on dp.dining_place_name collate utf8mb4_unicode_ci = '인하대학교 학생식당' collate utf8mb4_unicode_ci
+ and dp.dining_place_type collate utf8mb4_unicode_ci = 'STUDENT' collate utf8mb4_unicode_ci
 join cafeteria_menu m
   on m.dining_place_id = dp.dining_place_id
  and m.served_date = s.served_date
- and m.meal_type = s.meal_type
+ and m.meal_type collate utf8mb4_unicode_ci = s.meal_type collate utf8mb4_unicode_ci
 join cafeteria_menu_option o
   on o.menu_id = m.menu_id
- and o.option_name = s.option_name
+ and o.option_name collate utf8mb4_unicode_ci = s.option_name collate utf8mb4_unicode_ci
 left join cafeteria_menu_item existing_item
   on existing_item.option_id = o.option_id
- and existing_item.raw_item_name = s.option_name
+ and existing_item.raw_item_name collate utf8mb4_unicode_ci = s.option_name collate utf8mb4_unicode_ci
 where existing_item.menu_item_id is null;
 
 drop table if exists tmp_inha_student_seed;

@@ -7,7 +7,7 @@ create table tmp_inha_dorm_week3_seed (
     option_name varchar(255) not null,
     source_label varchar(255) not null,
     calories_kcal decimal(10,2) null
-) character set utf8mb4 collate utf8mb4_unicode_ci;
+);
 
 insert into tmp_inha_dorm_week3_seed (served_date, meal_type, category_code, option_name, source_label, calories_kcal) values
     ('2026-05-18', 'LUNCH', 'DORM_A', '똑)닭개장 / 쌀밥 / 미트볼폭찹 / 마늘쫑건새우볶음 / 배추김치', '2026-05-18 생활관 점심 A', 844.00),
@@ -53,22 +53,22 @@ from (
     from tmp_inha_dorm_week3_seed
 ) s
 join dining_place dp
-  on dp.dining_place_name = '인하대학교 생활관식당'
- and dp.dining_place_type = 'DORMITORY'
+  on dp.dining_place_name collate utf8mb4_unicode_ci = '인하대학교 생활관식당' collate utf8mb4_unicode_ci
+ and dp.dining_place_type collate utf8mb4_unicode_ci = 'DORMITORY' collate utf8mb4_unicode_ci
 on duplicate key update menu_id = menu_id;
 
 insert into cafeteria_menu_option (menu_id, category_id, option_name, source_label, is_available, calories_kcal)
 select m.menu_id, c.category_id, s.option_name, s.source_label, true, s.calories_kcal
 from tmp_inha_dorm_week3_seed s
 join dining_place dp
-  on dp.dining_place_name = '인하대학교 생활관식당'
- and dp.dining_place_type = 'DORMITORY'
+  on dp.dining_place_name collate utf8mb4_unicode_ci = '인하대학교 생활관식당' collate utf8mb4_unicode_ci
+ and dp.dining_place_type collate utf8mb4_unicode_ci = 'DORMITORY' collate utf8mb4_unicode_ci
 join cafeteria_menu m
   on m.dining_place_id = dp.dining_place_id
  and m.served_date = s.served_date
- and m.meal_type = s.meal_type
+ and m.meal_type collate utf8mb4_unicode_ci = s.meal_type collate utf8mb4_unicode_ci
 join menu_category c
-  on c.category_code = s.category_code
+  on c.category_code collate utf8mb4_unicode_ci = s.category_code collate utf8mb4_unicode_ci
 on duplicate key update
     category_id = values(category_id),
     source_label = values(source_label),
@@ -79,18 +79,18 @@ insert into cafeteria_menu_item (option_id, food_id, raw_item_name, amount_g)
 select o.option_id, null, s.option_name, 100.00
 from tmp_inha_dorm_week3_seed s
 join dining_place dp
-  on dp.dining_place_name = '인하대학교 생활관식당'
- and dp.dining_place_type = 'DORMITORY'
+  on dp.dining_place_name collate utf8mb4_unicode_ci = '인하대학교 생활관식당' collate utf8mb4_unicode_ci
+ and dp.dining_place_type collate utf8mb4_unicode_ci = 'DORMITORY' collate utf8mb4_unicode_ci
 join cafeteria_menu m
   on m.dining_place_id = dp.dining_place_id
  and m.served_date = s.served_date
- and m.meal_type = s.meal_type
+ and m.meal_type collate utf8mb4_unicode_ci = s.meal_type collate utf8mb4_unicode_ci
 join cafeteria_menu_option o
   on o.menu_id = m.menu_id
- and o.option_name = s.option_name
+ and o.option_name collate utf8mb4_unicode_ci = s.option_name collate utf8mb4_unicode_ci
 left join cafeteria_menu_item existing_item
   on existing_item.option_id = o.option_id
- and existing_item.raw_item_name = s.option_name
+ and existing_item.raw_item_name collate utf8mb4_unicode_ci = s.option_name collate utf8mb4_unicode_ci
 where existing_item.menu_item_id is null;
 
 drop table if exists tmp_inha_dorm_week3_seed;
