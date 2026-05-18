@@ -1,11 +1,12 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
-    "builder": "NIXPACKS",
-    "buildCommand": "./gradlew clean bootJar"
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "Dockerfile",
+    "buildCommand": null
   },
   "deploy": {
-    "startCommand": "java -jar build/libs/database-backend-0.0.1-SNAPSHOT.jar",
+    "startCommand": null,
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 3
   }
