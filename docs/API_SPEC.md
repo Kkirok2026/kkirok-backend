@@ -189,7 +189,7 @@
 
 `POST /menus/crawl/inha/student`
 
-인하대 학생식당 메뉴 페이지를 크롤링해 `cafeteria_menu`, `cafeteria_menu_option`, `cafeteria_menu_item`에 저장한다. 해당 페이지가 SSO 인증 화면을 반환하면 `INHA_MENU_REQUIRES_AUTH` 오류를 반환한다.
+인하대 학생식당 공개 메뉴 페이지(`https://www.inha.ac.kr/kr/1072/subview.do`)를 크롤링해 `cafeteria_menu`, `cafeteria_menu_option`, `cafeteria_menu_item`에 저장한다. 수동 로그인 쿠키는 사용하지 않는다. 해당 페이지가 SSO 인증 화면을 반환하면 `INHA_MENU_REQUIRES_AUTH` 오류를 반환한다.
 
 자동 크롤링은 매주 월요일 오전 6시(`Asia/Seoul`)에 1회 실행된다. 위 API는 자동 크롤링 실패 또는 수동 갱신이 필요할 때 다시 실행하는 용도다.
 

@@ -3,6 +3,8 @@ package com.database2026.backend.menu;
 import com.database2026.backend.common.DomainException;
 import com.database2026.backend.menu.MenuDtos.InhaMenuCrawlResponse;
 import java.io.IOException;
+import java.net.CookieManager;
+import java.net.CookiePolicy;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -50,7 +52,6 @@ public class InhaMenuCrawlerService {
     private final JdbcTemplate jdbcTemplate;
     private final MenuFoodMatcher menuFoodMatcher;
     private final HttpClient httpClient;
-    private final String inhaMenuCookie;
     private final String inhaMenuLayout;
     private final boolean matchFoodOnCrawl;
     private final Duration timeout;
@@ -58,19 +59,18 @@ public class InhaMenuCrawlerService {
     public InhaMenuCrawlerService(
             JdbcTemplate jdbcTemplate,
             MenuFoodMatcher menuFoodMatcher,
-            @Value("${inha.menu.cookie:}") String inhaMenuCookie,
             @Value("${inha.menu.layout:J3sRfz6SuHMYDlWbLXHbgQ==}") String inhaMenuLayout,
             @Value("${inha.menu.match-food-on-crawl:false}") boolean matchFoodOnCrawl,
             @Value("${inha.menu.timeout-ms:5000}") long timeoutMs
     ) {
         this.jdbcTemplate = jdbcTemplate;
         this.menuFoodMatcher = menuFoodMatcher;
-        this.inhaMenuCookie = inhaMenuCookie == null ? "" : inhaMenuCookie.trim();
         this.inhaMenuLayout = inhaMenuLayout == null ? "" : inhaMenuLayout.trim();
         this.matchFoodOnCrawl = matchFoodOnCrawl;
         this.timeout = Duration.ofMillis(timeoutMs);
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(this.timeout)
+                .cookieHandler(new CookieManager(null, CookiePolicy.ACCEPT_ALL))
                 .followRedirects(HttpClient.Redirect.NORMAL)
                 .build();
     }
@@ -98,7 +98,7 @@ public class InhaMenuCrawlerService {
             if (requiresAuth) {
                 throw DomainException.unauthorized(
                         "INHA_MENU_REQUIRES_AUTH",
-                        "인하대 학생식당 메뉴 페이지가 SSO 인증 화면을 반환했습니다. INHA_MENU_COOKIE에 로그인 세션 쿠키가 필요합니다."
+                        "인하대 학생식당 공개 메뉴 페이지가 SSO 인증 화면을 반환했습니다. 페이지 접근 흐름 또는 요청 헤더를 확인해야 합니다."
                 );
             }
             throw DomainException.notFound(
@@ -129,10 +129,9 @@ public class InhaMenuCrawlerService {
     private String fetchStudentMenuPage() {
         return send(browserRequest(INHA_STUDENT_MENU_PAGE_URI)
                 .GET()
-                .setHeader("Referer", "https://idp.inha.ac.kr:8443/")
                 .header("Sec-Fetch-Dest", "document")
                 .header("Sec-Fetch-Mode", "navigate")
-                .header("Sec-Fetch-Site", "same-site")
+                .header("Sec-Fetch-Site", "none")
                 .header("Upgrade-Insecure-Requests", "1"));
     }
 
@@ -155,9 +154,6 @@ public class InhaMenuCrawlerService {
     }
 
     private String send(HttpRequest.Builder requestBuilder) {
-        if (!inhaMenuCookie.isBlank()) {
-            requestBuilder.header("Cookie", inhaMenuCookie);
-        }
         HttpRequest request = requestBuilder.build();
         try {
             HttpResponse<byte[]> response = httpClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
