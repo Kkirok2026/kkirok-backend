@@ -196,7 +196,7 @@ public class MenuFoodMatcher {
 
     private Map<Long, BigDecimal> defaultServingByFoodId() {
         return jdbcTemplate.query("""
-                        select f.food_id, f.default_serving_g
+                        select f.food_id, f.nutrition_basis_amount_g
                         from food f
                         where not exists (
                             select 1
@@ -206,7 +206,7 @@ public class MenuFoodMatcher {
                         """,
                 (rs, rowNum) -> Map.entry(
                         rs.getLong("food_id"),
-                        rs.getBigDecimal("default_serving_g")
+                        rs.getBigDecimal("nutrition_basis_amount_g")
                 )
         ).stream().collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
     }

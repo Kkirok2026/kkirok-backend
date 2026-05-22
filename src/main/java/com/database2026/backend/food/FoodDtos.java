@@ -40,7 +40,11 @@ public final class FoodDtos {
             String foodName,
             String matchedAlias,
             BigDecimal defaultServingG,
-            NutrientTotals nutrients
+            BigDecimal nutritionBasisAmountG,
+            BigDecimal totalWeightG,
+            NutrientTotals nutrients,
+            NutrientTotals nutritionBasisNutrients,
+            NutrientTotals totalWeightNutrients
     ) {
     }
 
@@ -50,7 +54,11 @@ public final class FoodDtos {
             String sourceFoodCode,
             String foodName,
             BigDecimal defaultServingG,
-            NutrientTotals nutrients
+            BigDecimal nutritionBasisAmountG,
+            BigDecimal totalWeightG,
+            NutrientTotals nutrients,
+            NutrientTotals nutritionBasisNutrients,
+            NutrientTotals totalWeightNutrients
     ) {
     }
 }

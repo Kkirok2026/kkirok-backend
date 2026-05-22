@@ -48,6 +48,12 @@ public final class MealDtos {
     ) {
     }
 
+    @Schema(description = "식단 항목의 실제 섭취량 수정 요청")
+    public record MealLogItemAmountUpdateRequest(
+            @NotNull @Positive @Schema(description = "사용자가 먹은 양(g)", example = "150") BigDecimal amountG
+    ) {
+    }
+
     public record MealLogResponse(
             Long mealLogId,
             LocalDate logDate,

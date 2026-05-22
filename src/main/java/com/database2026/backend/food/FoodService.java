@@ -10,6 +10,8 @@ import com.database2026.backend.food.FoodDtos.FoodSummary;
 import com.database2026.backend.support.SqlSupport;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -134,6 +136,8 @@ public class FoodService {
                                        f.source_food_code,
                                        f.food_name,
                                        f.default_serving_g,
+                                       f.nutrition_basis_amount_g,
+                                       f.total_weight_g,
                                        (
                                            select min(a.alias_name)
                                            from food_alias a
@@ -148,7 +152,19 @@ public class FoodService {
                                        coalesce(f.protein_g * f.default_serving_g / 100, 0) as protein_g,
                                        coalesce(f.fat_g * f.default_serving_g / 100, 0) as fat_g,
                                        coalesce(f.sugar_g * f.default_serving_g / 100, 0) as sugar_g,
-                                       coalesce(f.sodium_mg * f.default_serving_g / 100, 0) as sodium_mg
+                                       coalesce(f.sodium_mg * f.default_serving_g / 100, 0) as sodium_mg,
+                                       coalesce(f.calories_kcal * f.nutrition_basis_amount_g / 100, 0) as basis_calories_kcal,
+                                       coalesce(f.carb_g * f.nutrition_basis_amount_g / 100, 0) as basis_carb_g,
+                                       coalesce(f.protein_g * f.nutrition_basis_amount_g / 100, 0) as basis_protein_g,
+                                       coalesce(f.fat_g * f.nutrition_basis_amount_g / 100, 0) as basis_fat_g,
+                                       coalesce(f.sugar_g * f.nutrition_basis_amount_g / 100, 0) as basis_sugar_g,
+                                       coalesce(f.sodium_mg * f.nutrition_basis_amount_g / 100, 0) as basis_sodium_mg,
+                                       coalesce(f.calories_kcal * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_calories_kcal,
+                                       coalesce(f.carb_g * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_carb_g,
+                                       coalesce(f.protein_g * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_protein_g,
+                                       coalesce(f.fat_g * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_fat_g,
+                                       coalesce(f.sugar_g * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_sugar_g,
+                                       coalesce(f.sodium_mg * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_sodium_mg
                                 from food f
                                 where (
                                       f.source_name = ?
@@ -179,6 +195,7 @@ public class FoodService {
                                       )
                                 )
                                 group by f.food_id, f.source_name, f.source_food_code, f.food_name, f.default_serving_g,
+                                         f.nutrition_basis_amount_g, f.total_weight_g,
                                          f.calories_kcal, f.carb_g, f.protein_g, f.fat_g, f.sugar_g, f.sodium_mg
                                 order by case
                                              when f.source_name = 'USER_CUSTOM' then 0
@@ -195,7 +212,11 @@ public class FoodService {
                                 rs.getString("food_name"),
                                 rs.getString("matched_alias"),
                                 rs.getBigDecimal("default_serving_g"),
-                                NutrientTotals.from(rs)
+                                rs.getBigDecimal("nutrition_basis_amount_g"),
+                                rs.getBigDecimal("total_weight_g"),
+                                NutrientTotals.from(rs),
+                                nutrients(rs, "basis_"),
+                                nutrients(rs, "total_")
                         ),
                         pattern,
                         compactPattern,
@@ -453,9 +474,9 @@ public class FoodService {
 
     private long insertCustomFood(long userId, String foodName, String normalizedFoodName, BigDecimal amountG) {
         long foodId = sqlSupport.insert("""
-                insert into food (source_name, source_food_code, food_name, default_serving_g)
-                values (?, ?, ?, ?)
-                """, USER_CUSTOM_SOURCE_NAME, customFoodCode(userId), foodName, amountG);
+                insert into food (source_name, source_food_code, food_name, default_serving_g, nutrition_basis_amount_g, total_weight_g)
+                values (?, ?, ?, ?, ?, ?)
+                """, USER_CUSTOM_SOURCE_NAME, customFoodCode(userId), foodName, amountG, amountG, amountG);
         sqlSupport.update("""
                 insert into user_custom_food (user_id, food_id, food_name, normalized_food_name, serving_amount_g)
                 values (?, ?, ?, ?, ?)
@@ -467,10 +488,12 @@ public class FoodService {
         jdbcTemplate.update("""
                 update food
                 set food_name = ?,
-                    default_serving_g = ?
+                    default_serving_g = ?,
+                    nutrition_basis_amount_g = ?,
+                    total_weight_g = ?
                 where food_id = ?
                   and source_name = ?
-                """, foodName, amountG, foodId, USER_CUSTOM_SOURCE_NAME);
+                """, foodName, amountG, amountG, amountG, foodId, USER_CUSTOM_SOURCE_NAME);
         jdbcTemplate.update("""
                 update user_custom_food
                 set food_name = ?,
@@ -488,16 +511,18 @@ public class FoodService {
             jdbcTemplate.update("""
                     update food
                     set food_name = ?,
-                        default_serving_g = ?
+                        default_serving_g = ?,
+                        nutrition_basis_amount_g = ?,
+                        total_weight_g = ?
                     where food_id = ?
-                    """, row.foodName(), row.defaultServingG(), existingFoodId.get());
+                    """, row.foodName(), row.nutritionBasisAmountG(), row.nutritionBasisAmountG(), row.totalWeightG(), existingFoodId.get());
             return existingFoodId.get();
         }
         try {
             return sqlSupport.insert("""
-                    insert into food (source_name, source_food_code, food_name, default_serving_g)
-                    values (?, ?, ?, ?)
-                    """, PUBLIC_NUTRITION_SOURCE_NAME, row.foodCode(), row.foodName(), row.defaultServingG());
+                    insert into food (source_name, source_food_code, food_name, default_serving_g, nutrition_basis_amount_g, total_weight_g)
+                    values (?, ?, ?, ?, ?, ?)
+                    """, PUBLIC_NUTRITION_SOURCE_NAME, row.foodCode(), row.foodName(), row.nutritionBasisAmountG(), row.nutritionBasisAmountG(), row.totalWeightG());
         } catch (DuplicateKeyException exception) {
             Optional<Long> duplicateFoodId = foodIdBySourceCode(PUBLIC_NUTRITION_SOURCE_NAME, row.foodCode())
                     .or(() -> foodIdBySourceNameAndFoodName(PUBLIC_NUTRITION_SOURCE_NAME, row.foodName()));
@@ -579,19 +604,34 @@ public class FoodService {
                                        f.source_food_code,
                                        f.food_name,
                                        f.default_serving_g,
+                                       f.nutrition_basis_amount_g,
+                                       f.total_weight_g,
                                        null as matched_alias,
                                        coalesce(f.calories_kcal * f.default_serving_g / 100, 0) as calories_kcal,
                                        coalesce(f.carb_g * f.default_serving_g / 100, 0) as carb_g,
                                        coalesce(f.protein_g * f.default_serving_g / 100, 0) as protein_g,
                                        coalesce(f.fat_g * f.default_serving_g / 100, 0) as fat_g,
                                        coalesce(f.sugar_g * f.default_serving_g / 100, 0) as sugar_g,
-                                       coalesce(f.sodium_mg * f.default_serving_g / 100, 0) as sodium_mg
+                                       coalesce(f.sodium_mg * f.default_serving_g / 100, 0) as sodium_mg,
+                                       coalesce(f.calories_kcal * f.nutrition_basis_amount_g / 100, 0) as basis_calories_kcal,
+                                       coalesce(f.carb_g * f.nutrition_basis_amount_g / 100, 0) as basis_carb_g,
+                                       coalesce(f.protein_g * f.nutrition_basis_amount_g / 100, 0) as basis_protein_g,
+                                       coalesce(f.fat_g * f.nutrition_basis_amount_g / 100, 0) as basis_fat_g,
+                                       coalesce(f.sugar_g * f.nutrition_basis_amount_g / 100, 0) as basis_sugar_g,
+                                       coalesce(f.sodium_mg * f.nutrition_basis_amount_g / 100, 0) as basis_sodium_mg,
+                                       coalesce(f.calories_kcal * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_calories_kcal,
+                                       coalesce(f.carb_g * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_carb_g,
+                                       coalesce(f.protein_g * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_protein_g,
+                                       coalesce(f.fat_g * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_fat_g,
+                                       coalesce(f.sugar_g * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_sugar_g,
+                                       coalesce(f.sodium_mg * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_sodium_mg
                                 from food f
                                 join user_custom_food ucf on ucf.food_id = f.food_id
                                 where f.food_id = ?
                                   and f.source_name = ?
                                   and ucf.user_id = ?
                                 group by f.food_id, f.source_name, f.source_food_code, f.food_name, f.default_serving_g,
+                                         f.nutrition_basis_amount_g, f.total_weight_g,
                                          f.calories_kcal, f.carb_g, f.protein_g, f.fat_g, f.sugar_g, f.sodium_mg
                                 """,
                         (rs, rowNum) -> new FoodSummary(
@@ -601,7 +641,11 @@ public class FoodService {
                                 rs.getString("food_name"),
                                 rs.getString("matched_alias"),
                                 rs.getBigDecimal("default_serving_g"),
-                                NutrientTotals.from(rs)
+                                rs.getBigDecimal("nutrition_basis_amount_g"),
+                                rs.getBigDecimal("total_weight_g"),
+                                NutrientTotals.from(rs),
+                                nutrients(rs, "basis_"),
+                                nutrients(rs, "total_")
                         ),
                         foodId,
                         USER_CUSTOM_SOURCE_NAME,
@@ -617,16 +661,31 @@ public class FoodService {
                                f.source_food_code,
                                f.food_name,
                                f.default_serving_g,
+                               f.nutrition_basis_amount_g,
+                               f.total_weight_g,
                                coalesce(f.calories_kcal * f.default_serving_g / 100, 0) as calories_kcal,
                                coalesce(f.carb_g * f.default_serving_g / 100, 0) as carb_g,
                                coalesce(f.protein_g * f.default_serving_g / 100, 0) as protein_g,
                                coalesce(f.fat_g * f.default_serving_g / 100, 0) as fat_g,
                                coalesce(f.sugar_g * f.default_serving_g / 100, 0) as sugar_g,
-                               coalesce(f.sodium_mg * f.default_serving_g / 100, 0) as sodium_mg
+                               coalesce(f.sodium_mg * f.default_serving_g / 100, 0) as sodium_mg,
+                               coalesce(f.calories_kcal * f.nutrition_basis_amount_g / 100, 0) as basis_calories_kcal,
+                               coalesce(f.carb_g * f.nutrition_basis_amount_g / 100, 0) as basis_carb_g,
+                               coalesce(f.protein_g * f.nutrition_basis_amount_g / 100, 0) as basis_protein_g,
+                               coalesce(f.fat_g * f.nutrition_basis_amount_g / 100, 0) as basis_fat_g,
+                               coalesce(f.sugar_g * f.nutrition_basis_amount_g / 100, 0) as basis_sugar_g,
+                               coalesce(f.sodium_mg * f.nutrition_basis_amount_g / 100, 0) as basis_sodium_mg,
+                               coalesce(f.calories_kcal * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_calories_kcal,
+                               coalesce(f.carb_g * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_carb_g,
+                               coalesce(f.protein_g * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_protein_g,
+                               coalesce(f.fat_g * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_fat_g,
+                               coalesce(f.sugar_g * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_sugar_g,
+                               coalesce(f.sodium_mg * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_sodium_mg
                         from food f
                         where f.food_id = ?
                           and f.source_name = 'NATIONAL_INTEGRATED'
                         group by f.food_id, f.source_name, f.source_food_code, f.food_name, f.default_serving_g,
+                                 f.nutrition_basis_amount_g, f.total_weight_g,
                                  f.calories_kcal, f.carb_g, f.protein_g, f.fat_g, f.sugar_g, f.sodium_mg
                         """,
                 (rs, rowNum) -> new FoodDetail(
@@ -635,10 +694,30 @@ public class FoodService {
                         rs.getString("source_food_code"),
                         rs.getString("food_name"),
                         rs.getBigDecimal("default_serving_g"),
-                        NutrientTotals.from(rs)
+                        rs.getBigDecimal("nutrition_basis_amount_g"),
+                        rs.getBigDecimal("total_weight_g"),
+                        NutrientTotals.from(rs),
+                        nutrients(rs, "basis_"),
+                        nutrients(rs, "total_")
                 ),
                 foodId
         ).stream().findFirst().orElseThrow(() -> DomainException.notFound("FOOD_NOT_FOUND", "음식을 찾을 수 없습니다."));
+    }
+
+    private NutrientTotals nutrients(ResultSet rs, String prefix) throws SQLException {
+        return new NutrientTotals(
+                value(rs, prefix + "calories_kcal"),
+                value(rs, prefix + "carb_g"),
+                value(rs, prefix + "protein_g"),
+                value(rs, prefix + "fat_g"),
+                value(rs, prefix + "sugar_g"),
+                value(rs, prefix + "sodium_mg")
+        );
+    }
+
+    private BigDecimal value(ResultSet rs, String columnName) throws SQLException {
+        BigDecimal value = rs.getBigDecimal(columnName);
+        return value == null ? BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP) : value.setScale(2, RoundingMode.HALF_UP);
     }
 
     private String normalizeQuery(String query) {

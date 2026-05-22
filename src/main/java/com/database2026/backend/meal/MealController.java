@@ -5,6 +5,7 @@ import com.database2026.backend.common.ApiResponse;
 import com.database2026.backend.meal.MealDtos.DailySummaryResponse;
 import com.database2026.backend.meal.MealDtos.FoodMealLogItemsAddRequest;
 import com.database2026.backend.meal.MealDtos.MealLogCreateRequest;
+import com.database2026.backend.meal.MealDtos.MealLogItemAmountUpdateRequest;
 import com.database2026.backend.meal.MealDtos.MealLogListResponse;
 import com.database2026.backend.meal.MealDtos.MealLogResponse;
 import com.database2026.backend.meal.MealDtos.MenuOptionMealLogAddRequest;
@@ -114,6 +115,18 @@ public class MealController {
     ) {
         long userId = jwtAuthService.requireUserId(authorization);
         return ApiResponse.success(mealService.setExcluded(userId, mealLogId, mealLogItemId, excluded));
+    }
+
+    @PatchMapping("/meal-logs/{mealLogId}/items/{mealLogItemId}/amount")
+    @Operation(summary = "식단 항목 섭취량 수정", description = "사용자가 실제로 먹은 양(g)을 수정하면 해당 양 기준으로 열량과 영양성분을 다시 계산합니다.")
+    ApiResponse<MealLogResponse> updateItemAmount(
+            @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization,
+            @PathVariable long mealLogId,
+            @PathVariable long mealLogItemId,
+            @Valid @RequestBody MealLogItemAmountUpdateRequest request
+    ) {
+        long userId = jwtAuthService.requireUserId(authorization);
+        return ApiResponse.success(mealService.updateItemAmount(userId, mealLogId, mealLogItemId, request));
     }
 
     @GetMapping("/home/daily-summary")

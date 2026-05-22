@@ -7,6 +7,7 @@ import com.database2026.backend.meal.MealDtos.FoodMealLogItemRequest;
 import com.database2026.backend.meal.MealDtos.FoodMealLogItemsAddRequest;
 import com.database2026.backend.meal.MealDtos.MacroEnergyRatio;
 import com.database2026.backend.meal.MealDtos.MealLogCreateRequest;
+import com.database2026.backend.meal.MealDtos.MealLogItemAmountUpdateRequest;
 import com.database2026.backend.meal.MealDtos.MealLogItemResponse;
 import com.database2026.backend.meal.MealDtos.MealLogListResponse;
 import com.database2026.backend.meal.MealDtos.MealLogResponse;
@@ -87,6 +88,28 @@ public class MealService {
         return mealLog(userId, mealLogId);
     }
 
+    @Transactional
+    public MealLogResponse updateItemAmount(long userId, long mealLogId, long mealLogItemId, MealLogItemAmountUpdateRequest request) {
+        BigDecimal amountG = request.amountG();
+        if (amountG == null || amountG.compareTo(BigDecimal.ZERO) <= 0) {
+            throw DomainException.badRequest("AMOUNT_INVALID", "amountG는 0보다 커야 합니다.");
+        }
+        int updated = jdbcTemplate.update("""
+                update meal_log_item
+                set amount_g = ?
+                where meal_log_item_id = ?
+                  and meal_log_id in (
+                      select meal_log_id
+                      from meal_log
+                      where meal_log_id = ? and user_id = ?
+                  )
+                """, amountG, mealLogItemId, mealLogId, userId);
+        if (updated == 0) {
+            throw DomainException.notFound("MEAL_LOG_ITEM_NOT_FOUND", "식단 항목을 찾을 수 없습니다.");
+        }
+        return mealLog(userId, mealLogId);
+    }
+
     public MealLogResponse mealLog(long userId, long mealLogId) {
         MealLogHeader header = jdbcTemplate.query("""
                         select d.meal_log_id,
@@ -157,7 +180,7 @@ public class MealService {
 
     private void insertFoodItem(long userId, long mealLogId, long foodId, BigDecimal requestedAmountG) {
         FoodPortion food = foodPortion(userId, foodId);
-        BigDecimal amountG = Optional.ofNullable(requestedAmountG).orElse(food.defaultServingG());
+        BigDecimal amountG = Optional.ofNullable(requestedAmountG).orElse(food.defaultAddAmountG());
         insertMealLogItem(mealLogId, food.foodId(), null, food.foodName(), amountG);
     }
 
@@ -188,7 +211,9 @@ public class MealService {
 
     private FoodPortion foodPortion(long userId, Long foodId) {
         return jdbcTemplate.query("""
-                        select food_id, food_name, default_serving_g
+                        select food_id,
+                               food_name,
+                               coalesce(total_weight_g, default_serving_g) as default_add_amount_g
                         from food
                         where food_id = ?
                           and (
@@ -207,7 +232,7 @@ public class MealService {
                 (rs, rowNum) -> new FoodPortion(
                         rs.getLong("food_id"),
                         rs.getString("food_name"),
-                        rs.getBigDecimal("default_serving_g")
+                        rs.getBigDecimal("default_add_amount_g")
                 ),
                 foodId,
                 userId
@@ -738,7 +763,7 @@ public class MealService {
     private record MealLogHeader(Long mealLogId, LocalDate logDate, String mealType, String memo) {
     }
 
-    private record FoodPortion(Long foodId, String foodName, BigDecimal defaultServingG) {
+    private record FoodPortion(Long foodId, String foodName, BigDecimal defaultAddAmountG) {
     }
 
     private record MenuOptionContext(

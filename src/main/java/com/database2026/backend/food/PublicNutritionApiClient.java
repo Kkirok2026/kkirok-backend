@@ -188,11 +188,12 @@ class PublicNutritionApiClient {
 
     private NutritionRow nutritionRow(JsonNode node) {
         BigDecimal basisG = positiveOrDefault(amount(node, "nutConSrtrQua", "영양성분함량기준량"), BigDecimal.valueOf(100));
-        BigDecimal defaultServingG = positiveOrDefault(amount(node, "foodSize", "식품중량"), basisG);
+        BigDecimal totalWeightG = positiveAmount(amount(node, "foodSize", "식품중량"));
         return new NutritionRow(
                 text(node, "foodCd", "식품코드"),
                 text(node, "foodNm", "식품명"),
-                defaultServingG,
+                basisG,
+                totalWeightG,
                 amountPer100g(amount(node, "enerc", "에너지(kcal)"), basisG),
                 amountPer100g(amount(node, "chocdf", "탄수화물(g)"), basisG),
                 amountPer100g(amount(node, "prot", "단백질(g)"), basisG),
@@ -204,14 +205,15 @@ class PublicNutritionApiClient {
 
     private NutritionRow nutritionRow(List<String> cells) {
         if (cells.size() < 34) {
-            return new NutritionRow(null, null, null, null, null, null, null, null, null);
+            return new NutritionRow(null, null, null, null, null, null, null, null, null, null);
         }
         BigDecimal basisG = positiveOrDefault(amount(cells.get(5)), BigDecimal.valueOf(100));
-        BigDecimal defaultServingG = positiveOrDefault(amount(cells.get(33)), basisG);
+        BigDecimal totalWeightG = positiveAmount(amount(cells.get(33)));
         return new NutritionRow(
                 cells.get(0),
                 cells.get(1),
-                defaultServingG,
+                basisG,
+                totalWeightG,
                 amountPer100g(amount(cells.get(4)), basisG),
                 amountPer100g(amount(cells.get(10)), basisG),
                 amountPer100g(amount(cells.get(7)), basisG),
@@ -369,6 +371,10 @@ class PublicNutritionApiClient {
         return value == null || value.compareTo(BigDecimal.ZERO) <= 0 ? defaultValue : value;
     }
 
+    private BigDecimal positiveAmount(BigDecimal value) {
+        return value == null || value.compareTo(BigDecimal.ZERO) <= 0 ? null : value;
+    }
+
     private BigDecimal amountPer100g(BigDecimal amount, BigDecimal basisG) {
         if (amount == null) {
             return null;
@@ -404,7 +410,8 @@ class PublicNutritionApiClient {
     record NutritionRow(
             String foodCode,
             String foodName,
-            BigDecimal defaultServingG,
+            BigDecimal nutritionBasisAmountG,
+            BigDecimal totalWeightG,
             BigDecimal caloriesKcal,
             BigDecimal carbG,
             BigDecimal proteinG,
