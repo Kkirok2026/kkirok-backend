@@ -62,7 +62,7 @@ public class FoodService {
         Long currentUserId = userId.orElse(null);
 
         List<FoodSummary> items = searchLocal(searchQueries, safeLimit, currentUserId);
-        if (items.size() < safeLimit) {
+        if (shouldImportPublicNutrition(normalizedQuery, items, safeLimit)) {
             importPublicNutritionSearchRows(searchQueries, safeLimit);
             items = searchLocal(searchQueries, safeLimit, currentUserId);
         }
@@ -365,6 +365,18 @@ public class FoodService {
         return foodName == null ? "" : foodName.trim().toLowerCase(Locale.ROOT);
     }
 
+    private boolean shouldImportPublicNutrition(String normalizedQuery, List<FoodSummary> localItems, int safeLimit) {
+        if (localItems.isEmpty()) {
+            return true;
+        }
+        if (localItems.size() >= safeLimit) {
+            return false;
+        }
+        String queryKey = compactQuery(normalizedQuery);
+        return localItems.stream()
+                .allMatch(item -> compactQuery(foodNameDeduplicationKey(item.foodName())).equals(queryKey));
+    }
+
     private int importPublicNutritionRows(String query, int limit) {
         Set<String> queries = new LinkedHashSet<>();
         queries.add(query);
@@ -373,7 +385,7 @@ public class FoodService {
     }
 
     private int importPublicNutritionSearchRows(Collection<String> queries, int limit) {
-        int importedCount = importPublicNutritionRows(queries, limit);
+        int importedCount = 0;
         Set<String> importedFoodNames = new LinkedHashSet<>();
         for (String query : queries) {
             List<PublicNutritionApiClient.NutritionRow> rows;
