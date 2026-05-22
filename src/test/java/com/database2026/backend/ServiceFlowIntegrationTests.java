@@ -174,7 +174,7 @@ class ServiceFlowIntegrationTests {
     }
 
     @Test
-    void foodSearchKeepsDistinctPublicNutritionRowsWithSameName() throws Exception {
+    void foodSearchDeduplicatesPublicNutritionRowsByExactName() throws Exception {
         seedDuplicateFoods();
 
         JsonNode response = getOkWithParams("/api/v1/foods/search", null, "q", "테스트중복음식", "limit", "10");
@@ -185,6 +185,20 @@ class ServiceFlowIntegrationTests {
         assertThat(items.get(0).at("/foodName").asText()).isEqualTo("테스트 중복 음식");
         assertThat(items.get(1).at("/sourceName").asText()).isEqualTo("NATIONAL_INTEGRATED");
         assertThat(items.get(1).at("/foodName").asText()).isEqualTo("테스트중복음식");
+    }
+
+    @Test
+    void foodSearchReturnsFoodsWhoseNamesContainQuery() throws Exception {
+        seedContainsFoods();
+
+        JsonNode response = getOkWithParams("/api/v1/foods/search", null, "q", "두쫀쿠", "limit", "20");
+
+        JsonNode items = response.at("/data/items");
+        assertThat(foodNames(items)).contains(
+                "두쫀쿠",
+                "초코 두쫀쿠",
+                "두쫀쿠 크림 샌드"
+        );
     }
 
     @Test
@@ -276,9 +290,10 @@ class ServiceFlowIntegrationTests {
     }
 
     private void seedDuplicateFoods() {
-        jdbcTemplate.update("delete from food_alias where food_id in (select food_id from food where source_food_code in (?, ?))",
-                "TEST-DUP-PUBLIC-1", "TEST-DUP-PUBLIC-2");
-        jdbcTemplate.update("delete from food where source_food_code in (?, ?)", "TEST-DUP-PUBLIC-1", "TEST-DUP-PUBLIC-2");
+        jdbcTemplate.update("delete from food_alias where food_id in (select food_id from food where source_food_code in (?, ?, ?))",
+                "TEST-DUP-PUBLIC-1", "TEST-DUP-PUBLIC-2", "TEST-DUP-PUBLIC-3");
+        jdbcTemplate.update("delete from food where source_food_code in (?, ?, ?)",
+                "TEST-DUP-PUBLIC-1", "TEST-DUP-PUBLIC-2", "TEST-DUP-PUBLIC-3");
         jdbcTemplate.update("""
                 insert into food (
                     source_name, source_food_code, food_name, default_serving_g,
@@ -295,6 +310,51 @@ class ServiceFlowIntegrationTests {
                 values ('NATIONAL_INTEGRATED', 'TEST-DUP-PUBLIC-2', '테스트 중복 음식', 100.00,
                         200.00, 20.00, 30.00, 40.00, 0.00, 0.00)
                 """);
+        jdbcTemplate.update("""
+                insert into food (
+                    source_name, source_food_code, food_name, default_serving_g,
+                    calories_kcal, carb_g, protein_g, fat_g, sugar_g, sodium_mg
+                )
+                values ('NATIONAL_INTEGRATED', 'TEST-DUP-PUBLIC-3', '테스트중복음식', 100.00,
+                        300.00, 30.00, 40.00, 50.00, 0.00, 0.00)
+                """);
+    }
+
+    private void seedContainsFoods() {
+        jdbcTemplate.update("delete from food_alias where food_id in (select food_id from food where source_food_code in (?, ?, ?))",
+                "TEST-CONTAINS-PUBLIC-1", "TEST-CONTAINS-PUBLIC-2", "TEST-CONTAINS-PUBLIC-3");
+        jdbcTemplate.update("delete from food where source_food_code in (?, ?, ?)",
+                "TEST-CONTAINS-PUBLIC-1", "TEST-CONTAINS-PUBLIC-2", "TEST-CONTAINS-PUBLIC-3");
+        jdbcTemplate.update("""
+                insert into food (
+                    source_name, source_food_code, food_name, default_serving_g,
+                    calories_kcal, carb_g, protein_g, fat_g, sugar_g, sodium_mg
+                )
+                values ('NATIONAL_INTEGRATED', 'TEST-CONTAINS-PUBLIC-1', '두쫀쿠', 100.00,
+                        100.00, 10.00, 20.00, 30.00, 0.00, 0.00)
+                """);
+        jdbcTemplate.update("""
+                insert into food (
+                    source_name, source_food_code, food_name, default_serving_g,
+                    calories_kcal, carb_g, protein_g, fat_g, sugar_g, sodium_mg
+                )
+                values ('NATIONAL_INTEGRATED', 'TEST-CONTAINS-PUBLIC-2', '초코 두쫀쿠', 100.00,
+                        200.00, 20.00, 30.00, 40.00, 0.00, 0.00)
+                """);
+        jdbcTemplate.update("""
+                insert into food (
+                    source_name, source_food_code, food_name, default_serving_g,
+                    calories_kcal, carb_g, protein_g, fat_g, sugar_g, sodium_mg
+                )
+                values ('NATIONAL_INTEGRATED', 'TEST-CONTAINS-PUBLIC-3', '두쫀쿠 크림 샌드', 100.00,
+                        300.00, 30.00, 40.00, 50.00, 0.00, 0.00)
+                """);
+    }
+
+    private List<String> foodNames(JsonNode items) {
+        List<String> names = new java.util.ArrayList<>();
+        items.forEach(item -> names.add(item.at("/foodName").asText()));
+        return names;
     }
 
     private String login(String email, String password) throws Exception {

@@ -30,7 +30,10 @@ import org.springframework.stereotype.Component;
 class PublicNutritionApiClient {
 
     private static final Pattern FIRST_NUMBER = Pattern.compile("-?\\d+(?:\\.\\d+)?");
+    private static final Pattern PORTAL_TABLE_ROW = Pattern.compile("<tr\\s+class=\"contentsTr\"[^>]*>(.*?)</tr>", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+    private static final Pattern PORTAL_TABLE_CELL = Pattern.compile("<td[^>]*>(.*?)</td>", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
     private static final String API_URL = "https://api.data.go.kr/openapi/tn_pubr_public_nutri_info_api";
+    private static final URI PORTAL_STANDARD_SEARCH_URI = URI.create("https://www.data.go.kr/en/tcs/dss/selectStdDataDetailView.do");
     private static final int CONTAINS_SEARCH_PAGE_SIZE = 1000;
 
     private final String serviceKey;
@@ -76,15 +79,19 @@ class PublicNutritionApiClient {
     }
 
     List<NutritionRow> searchFoodsContaining(String query, int limit) {
-        if (!hasServiceKey()) {
-            return List.of();
-        }
         String normalizedQuery = normalizeSearchText(query);
         if (normalizedQuery.isBlank()) {
             return List.of();
         }
 
         int safeLimit = Math.min(Math.max(limit, 1), 50);
+        List<NutritionRow> portalRows = searchPortalFoodsContaining(query, safeLimit);
+        if (!portalRows.isEmpty()) {
+            return portalRows;
+        }
+        if (!hasServiceKey()) {
+            return List.of();
+        }
         Map<String, NutritionRow> rowsByFoodCode = new LinkedHashMap<>();
 
         JsonNode firstPage = getJson(searchUri(1, CONTAINS_SEARCH_PAGE_SIZE, null));
@@ -105,6 +112,61 @@ class PublicNutritionApiClient {
             }
         }
         return List.copyOf(rowsByFoodCode.values());
+    }
+
+    private List<NutritionRow> searchPortalFoodsContaining(String query, int limit) {
+        String body = "publicDataPk=15100064"
+                + "&colCondition=FOOD_NM"
+                + "&searchKeyword1=" + encode(query);
+        HttpRequest request = HttpRequest.newBuilder(PORTAL_STANDARD_SEARCH_URI)
+                .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
+                .timeout(timeout)
+                .header("Accept", "text/html")
+                .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
+                .build();
+        String html;
+        try {
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (response.statusCode() >= 400) {
+                return List.of();
+            }
+            html = response.body();
+        } catch (IOException exception) {
+            return List.of();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            return List.of();
+        }
+
+        Map<String, NutritionRow> rowsByFoodCode = new LinkedHashMap<>();
+        Matcher rowMatcher = PORTAL_TABLE_ROW.matcher(html);
+        while (rowMatcher.find() && rowsByFoodCode.size() < limit) {
+            NutritionRow row = nutritionRow(tableCells(rowMatcher.group(1)));
+            if (row.hasImportableData()) {
+                rowsByFoodCode.putIfAbsent(row.foodCode(), row);
+            }
+        }
+        return List.copyOf(rowsByFoodCode.values());
+    }
+
+    private List<String> tableCells(String rowHtml) {
+        List<String> cells = new ArrayList<>();
+        Matcher cellMatcher = PORTAL_TABLE_CELL.matcher(rowHtml);
+        while (cellMatcher.find()) {
+            cells.add(cleanHtmlCell(cellMatcher.group(1)));
+        }
+        return cells;
+    }
+
+    private String cleanHtmlCell(String html) {
+        return html.replaceAll("<[^>]+>", " ")
+                .replace("&nbsp;", " ")
+                .replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&#034;", "\"")
+                .replaceAll("\\s+", " ")
+                .trim();
     }
 
     private void collectContainingRows(
@@ -137,6 +199,25 @@ class PublicNutritionApiClient {
                 amountPer100g(amount(node, "fatce", "지방(g)"), basisG),
                 amountPer100g(amount(node, "sugar", "당류(g)"), basisG),
                 amountPer100g(amount(node, "nat", "나트륨(mg)"), basisG)
+        );
+    }
+
+    private NutritionRow nutritionRow(List<String> cells) {
+        if (cells.size() < 34) {
+            return new NutritionRow(null, null, null, null, null, null, null, null, null);
+        }
+        BigDecimal basisG = positiveOrDefault(amount(cells.get(5)), BigDecimal.valueOf(100));
+        BigDecimal defaultServingG = positiveOrDefault(amount(cells.get(33)), basisG);
+        return new NutritionRow(
+                cells.get(0),
+                cells.get(1),
+                defaultServingG,
+                amountPer100g(amount(cells.get(4)), basisG),
+                amountPer100g(amount(cells.get(10)), basisG),
+                amountPer100g(amount(cells.get(7)), basisG),
+                amountPer100g(amount(cells.get(8)), basisG),
+                amountPer100g(amount(cells.get(11)), basisG),
+                amountPer100g(amount(cells.get(17)), basisG)
         );
     }
 
@@ -270,6 +351,10 @@ class PublicNutritionApiClient {
 
     private BigDecimal amount(JsonNode node, String... fieldNames) {
         String value = text(node, fieldNames);
+        return amount(value);
+    }
+
+    private BigDecimal amount(String value) {
         if (value == null) {
             return null;
         }

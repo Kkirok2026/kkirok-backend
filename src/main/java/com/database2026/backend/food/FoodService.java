@@ -56,14 +56,13 @@ public class FoodService {
     public FoodSearchResponse search(String query, int limit, Optional<Long> userId) {
         String normalizedQuery = normalizeQuery(query);
         int safeLimit = Math.min(Math.max(limit, 1), 50);
-        String pattern = "%" + normalizedQuery + "%";
-        String compactPattern = "%" + compactQuery(normalizedQuery) + "%";
+        List<String> searchQueries = searchQueries(normalizedQuery);
         Long currentUserId = userId.orElse(null);
 
-        List<FoodSummary> items = searchLocal(pattern, compactPattern, safeLimit, currentUserId);
+        List<FoodSummary> items = searchLocal(searchQueries, safeLimit, currentUserId);
         if (items.size() < safeLimit) {
-            importPublicNutritionSearchRows(normalizedQuery, safeLimit);
-            items = searchLocal(pattern, compactPattern, safeLimit, currentUserId);
+            importPublicNutritionSearchRows(searchQueries, safeLimit);
+            items = searchLocal(searchQueries, safeLimit, currentUserId);
         }
         return new FoodSearchResponse(items);
     }
@@ -73,10 +72,15 @@ public class FoodService {
         int safeLimit = Math.min(Math.max(limit, 1), 10);
         Map<String, String> suggestions = new LinkedHashMap<>();
 
-        String pattern = "%" + normalizedQuery + "%";
-        String compactPattern = "%" + compactQuery(normalizedQuery) + "%";
-        for (String suggestion : localSuggestions(pattern, compactPattern, safeLimit * 4, userId.orElse(null))) {
-            addSuggestion(suggestions, suggestion);
+        for (String searchQuery : searchQueries(normalizedQuery)) {
+            String pattern = "%" + searchQuery + "%";
+            String compactPattern = "%" + compactQuery(searchQuery) + "%";
+            for (String suggestion : localSuggestions(pattern, compactPattern, safeLimit * 4, userId.orElse(null))) {
+                addSuggestion(suggestions, suggestion);
+                if (suggestions.size() >= safeLimit) {
+                    break;
+                }
+            }
             if (suggestions.size() >= safeLimit) {
                 break;
             }
@@ -110,6 +114,16 @@ public class FoodService {
         upsertNutrientValue(foodId, "SUGAR_G", per100g(optionalAmount(request.sugarG()), amountG));
         upsertNutrientValue(foodId, "SODIUM_MG", per100g(optionalAmount(request.sodiumMg()), amountG));
         return foodSummary(foodId, userId);
+    }
+
+    private List<FoodSummary> searchLocal(List<String> searchQueries, int safeLimit, Long userId) {
+        List<FoodSummary> items = new java.util.ArrayList<>();
+        for (String searchQuery : searchQueries) {
+            String pattern = "%" + searchQuery + "%";
+            String compactPattern = "%" + compactQuery(searchQuery) + "%";
+            items.addAll(searchLocal(pattern, compactPattern, safeLimit, userId));
+        }
+        return deduplicateSearchResults(items, safeLimit);
     }
 
     private List<FoodSummary> searchLocal(String pattern, String compactPattern, int safeLimit, Long userId) {
@@ -305,8 +319,14 @@ public class FoodService {
     }
 
     private String searchResultDeduplicationKey(FoodSummary item) {
-        if (!USER_CUSTOM_SOURCE_NAME.equals(item.sourceName()) && item.sourceFoodCode() != null && !item.sourceFoodCode().isBlank()) {
-            return item.sourceName() + ":" + item.sourceFoodCode();
+        if (!USER_CUSTOM_SOURCE_NAME.equals(item.sourceName())) {
+            String foodNameKey = foodNameDeduplicationKey(item.foodName());
+            if (!foodNameKey.isBlank()) {
+                return item.sourceName() + ":" + foodNameKey;
+            }
+            if (item.sourceFoodCode() != null && !item.sourceFoodCode().isBlank()) {
+                return item.sourceName() + ":" + item.sourceFoodCode();
+            }
         }
         String foodName = item.foodName() == null ? "" : item.foodName();
         String normalizedFoodName = foodName.toLowerCase(Locale.ROOT).replaceAll("[\\s_\\-()/]+", "");
@@ -320,6 +340,10 @@ public class FoodService {
         return suggestion.toLowerCase(Locale.ROOT).replaceAll("[\\s_\\-()/]+", "");
     }
 
+    private String foodNameDeduplicationKey(String foodName) {
+        return foodName == null ? "" : foodName.trim().toLowerCase(Locale.ROOT);
+    }
+
     private int importPublicNutritionRows(String query, int limit) {
         Set<String> queries = new LinkedHashSet<>();
         queries.add(query);
@@ -327,23 +351,24 @@ public class FoodService {
         return importPublicNutritionRows(queries, limit);
     }
 
-    private int importPublicNutritionSearchRows(String query, int limit) {
-        int importedCount = importPublicNutritionRows(query, limit);
-        if (importedCount >= limit) {
-            return importedCount;
-        }
-        List<PublicNutritionApiClient.NutritionRow> rows;
-        try {
-            rows = publicNutritionApiClient.searchFoodsContaining(query, limit);
-        } catch (DomainException exception) {
-            if ("PUBLIC_NUTRITION_API_FAILED".equals(exception.code())) {
-                return importedCount;
+    private int importPublicNutritionSearchRows(Collection<String> queries, int limit) {
+        int importedCount = importPublicNutritionRows(queries, limit);
+        Set<String> importedFoodNames = new LinkedHashSet<>();
+        for (String query : queries) {
+            List<PublicNutritionApiClient.NutritionRow> rows;
+            try {
+                rows = publicNutritionApiClient.searchFoodsContaining(query, limit);
+            } catch (DomainException exception) {
+                if ("PUBLIC_NUTRITION_API_FAILED".equals(exception.code())) {
+                    continue;
+                }
+                throw exception;
             }
-            throw exception;
-        }
-        for (PublicNutritionApiClient.NutritionRow row : rows) {
-            importPublicNutritionRow(row);
-            importedCount++;
+            for (PublicNutritionApiClient.NutritionRow row : rows) {
+                if (importPublicNutritionRowIfNewName(row, importedFoodNames)) {
+                    importedCount++;
+                }
+            }
         }
         return importedCount;
     }
@@ -364,6 +389,7 @@ public class FoodService {
         }
 
         int importedCount = 0;
+        Set<String> importedFoodNames = new LinkedHashSet<>();
         for (String apiQuery : apiQueries) {
             List<PublicNutritionApiClient.NutritionRow> rows;
             try {
@@ -375,11 +401,27 @@ public class FoodService {
                 throw exception;
             }
             for (PublicNutritionApiClient.NutritionRow row : rows) {
-                importPublicNutritionRow(row);
-                importedCount++;
+                if (importPublicNutritionRowIfNewName(row, importedFoodNames)) {
+                    importedCount++;
+                }
             }
         }
         return importedCount;
+    }
+
+    private boolean importPublicNutritionRowIfNewName(PublicNutritionApiClient.NutritionRow row, Set<String> importedFoodNames) {
+        if (!row.hasImportableData()) {
+            return false;
+        }
+        String foodNameKey = foodNameDeduplicationKey(row.foodName());
+        if (foodNameKey.isBlank() || !importedFoodNames.add(foodNameKey)) {
+            return false;
+        }
+        if (foodIdBySourceNameAndFoodName(PUBLIC_NUTRITION_SOURCE_NAME, row.foodName()).isPresent()) {
+            return false;
+        }
+        importPublicNutritionRow(row);
+        return true;
     }
 
     private void importPublicNutritionRow(PublicNutritionApiClient.NutritionRow row) {
@@ -605,6 +647,12 @@ public class FoodService {
             throw DomainException.badRequest("FOOD_QUERY_REQUIRED", "검색어 q가 필요합니다.");
         }
         return normalized;
+    }
+
+    private List<String> searchQueries(String query) {
+        LinkedHashSet<String> queries = new LinkedHashSet<>();
+        queries.add(query);
+        return List.copyOf(queries);
     }
 
     private String optionalSearchQuery(String query) {
