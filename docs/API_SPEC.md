@@ -132,7 +132,7 @@
 
 `PUT /users/me/profile`
 
-회원가입 후 키/현재 몸무게/목표 몸무게/목표 기간/성별을 처음 입력하거나 수정하고 BMI를 다시 계산한다. `targetWeightKg`, `targetPeriodValue`, `targetPeriodUnit`은 선택 값이다. 목표 기간 값이 있고 단위를 생략하면 `MONTH`로 저장된다.
+회원가입 후 키/현재 몸무게/목표 몸무게/목표 기간/성별을 처음 입력하거나 수정하고 BMI를 다시 계산한다. `targetWeightKg`, `targetPeriodValue`, `targetPeriodUnit`은 선택 값이다. 목표 기간 값이 있고 단위를 생략하면 `MONTH`로 저장된다. 응답에는 목표 기간이 설정/변경된 기준일 `targetPeriodStartedOn`과 오늘 기준 남은 일수 `targetRemainingDays`가 포함된다.
 
 ```json
 {

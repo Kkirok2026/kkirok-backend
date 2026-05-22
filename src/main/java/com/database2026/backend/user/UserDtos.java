@@ -8,6 +8,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 
 public final class UserDtos {
 
@@ -60,6 +61,8 @@ public final class UserDtos {
             BigDecimal targetWeightKg,
             Integer targetPeriodValue,
             String targetPeriodUnit,
+            LocalDate targetPeriodStartedOn,
+            Integer targetRemainingDays,
             BigDecimal bmi,
             String activityLevel
     ) {

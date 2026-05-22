@@ -70,6 +70,11 @@ class ServiceFlowIntegrationTests {
         assertThat(profile.at("/data/bmi").decimalValue()).isGreaterThan(BigDecimal.ZERO);
         assertThat(profile.at("/data/targetPeriodValue").asInt()).isEqualTo(3);
         assertThat(profile.at("/data/targetPeriodUnit").asText()).isEqualTo("MONTH");
+        assertThat(profile.at("/data/targetPeriodStartedOn").asText()).isNotBlank();
+        assertThat(profile.at("/data/targetRemainingDays").asInt()).isGreaterThan(0);
+
+        JsonNode updatedMe = getOk("/api/v1/users/me", token);
+        assertThat(updatedMe.at("/data/profile/targetRemainingDays").asInt()).isGreaterThan(0);
 
         JsonNode foodSearch = getOkWithParams("/api/v1/foods/search", token, "q", "라 면", "limit", "5");
         assertThat(foodSearch.at("/data/items").size()).isGreaterThan(0);

@@ -79,6 +79,7 @@ erDiagram
         decimal target_weight_kg
         int target_period_value
         varchar target_period_unit
+        date target_period_started_on
         varchar gender
         decimal bmi
         varchar activity_level

@@ -8,14 +8,20 @@ import com.database2026.backend.user.UserDtos.StudentVerificationResponse;
 import com.database2026.backend.user.UserDtos.UniversityResponse;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Locale;
+import java.util.Objects;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class UserService {
+
+    private static final ZoneId SERVICE_ZONE = ZoneId.of("Asia/Seoul");
 
     private final JdbcTemplate jdbcTemplate;
 
@@ -37,6 +43,7 @@ public class UserService {
                                p.target_weight_kg,
                                p.target_period_value,
                                p.target_period_unit,
+                               p.target_period_started_on,
                                p.bmi,
                                p.activity_level,
                                u.student_email,
@@ -62,6 +69,7 @@ public class UserService {
                                 rs.getBigDecimal("target_weight_kg"),
                                 rs.getObject("target_period_value", Integer.class),
                                 rs.getString("target_period_unit"),
+                                rs.getObject("target_period_started_on", LocalDate.class),
                                 rs.getBigDecimal("bmi"),
                                 rs.getString("activity_level")
                         ),
@@ -89,6 +97,7 @@ public class UserService {
             BigDecimal targetWeightKg,
             Integer targetPeriodValue,
             String targetPeriodUnit,
+            LocalDate targetPeriodStartedOn,
             BigDecimal bmi,
             String activityLevel
     ) {
@@ -102,6 +111,8 @@ public class UserService {
                 targetWeightKg,
                 targetPeriodValue,
                 targetPeriodUnit,
+                targetPeriodStartedOn,
+                targetRemainingDays(targetPeriodValue, targetPeriodUnit, targetPeriodStartedOn),
                 bmi,
                 activityLevel
         );
@@ -112,6 +123,12 @@ public class UserService {
         validateGender(request.gender());
         String activityLevel = normalizeActivityLevel(request.activityLevel());
         String targetPeriodUnit = normalizeTargetPeriodUnit(request.targetPeriodValue(), request.targetPeriodUnit());
+        LocalDate targetPeriodStartedOn = targetPeriodStartedOn(
+                userId,
+                request.targetWeightKg(),
+                request.targetPeriodValue(),
+                targetPeriodUnit
+        );
         BigDecimal bmi = calculateBmi(request.heightCm(), request.weightKg());
         if (request.age() != null) {
             jdbcTemplate.update("""
@@ -123,14 +140,15 @@ public class UserService {
         jdbcTemplate.update("""
                 insert into user_health_profile (
                     user_id, height_cm, weight_kg, target_weight_kg, target_period_value,
-                    target_period_unit, gender, bmi, activity_level
+                    target_period_unit, target_period_started_on, gender, bmi, activity_level
                 )
-                values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 on duplicate key update height_cm = values(height_cm),
                                         weight_kg = values(weight_kg),
                                         target_weight_kg = values(target_weight_kg),
                                         target_period_value = values(target_period_value),
                                         target_period_unit = values(target_period_unit),
+                                        target_period_started_on = values(target_period_started_on),
                                         gender = values(gender),
                                         bmi = values(bmi),
                                         activity_level = values(activity_level)
@@ -141,6 +159,7 @@ public class UserService {
                 request.targetWeightKg(),
                 request.targetPeriodValue(),
                 targetPeriodUnit,
+                targetPeriodStartedOn,
                 request.gender(),
                 bmi,
                 activityLevel
@@ -152,6 +171,8 @@ public class UserService {
                 request.targetWeightKg(),
                 request.targetPeriodValue(),
                 targetPeriodUnit,
+                targetPeriodStartedOn,
+                targetRemainingDays(request.targetPeriodValue(), targetPeriodUnit, targetPeriodStartedOn),
                 bmi,
                 activityLevel
         );
@@ -233,5 +254,73 @@ public class UserService {
             );
         }
         return normalized;
+    }
+
+    private LocalDate targetPeriodStartedOn(
+            long userId,
+            BigDecimal targetWeightKg,
+            Integer targetPeriodValue,
+            String targetPeriodUnit
+    ) {
+        if (targetPeriodValue == null) {
+            return null;
+        }
+
+        LocalDate today = LocalDate.now(SERVICE_ZONE);
+        return jdbcTemplate.query("""
+                        select target_weight_kg,
+                               target_period_value,
+                               target_period_unit,
+                               target_period_started_on
+                        from user_health_profile
+                        where user_id = ?
+                        """,
+                rs -> {
+                    if (!rs.next()) {
+                        return today;
+                    }
+
+                    BigDecimal existingTargetWeightKg = rs.getBigDecimal("target_weight_kg");
+                    Integer existingTargetPeriodValue = rs.getObject("target_period_value", Integer.class);
+                    String existingTargetPeriodUnit = rs.getString("target_period_unit");
+                    LocalDate existingTargetPeriodStartedOn = rs.getObject("target_period_started_on", LocalDate.class);
+
+                    if (existingTargetPeriodValue == null || existingTargetPeriodStartedOn == null) {
+                        return today;
+                    }
+                    if (!sameDecimal(existingTargetWeightKg, targetWeightKg)
+                            || !Objects.equals(existingTargetPeriodValue, targetPeriodValue)
+                            || !Objects.equals(existingTargetPeriodUnit, targetPeriodUnit)) {
+                        return today;
+                    }
+                    return existingTargetPeriodStartedOn;
+                },
+                userId
+        );
+    }
+
+    private boolean sameDecimal(BigDecimal left, BigDecimal right) {
+        if (left == null || right == null) {
+            return left == null && right == null;
+        }
+        return left.compareTo(right) == 0;
+    }
+
+    private Integer targetRemainingDays(Integer targetPeriodValue, String targetPeriodUnit, LocalDate targetPeriodStartedOn) {
+        if (targetPeriodValue == null || targetPeriodUnit == null || targetPeriodStartedOn == null) {
+            return null;
+        }
+
+        LocalDate targetDate = switch (targetPeriodUnit) {
+            case "WEEK" -> targetPeriodStartedOn.plusWeeks(targetPeriodValue);
+            case "MONTH" -> targetPeriodStartedOn.plusMonths(targetPeriodValue);
+            default -> null;
+        };
+        if (targetDate == null) {
+            return null;
+        }
+
+        long remainingDays = ChronoUnit.DAYS.between(LocalDate.now(SERVICE_ZONE), targetDate);
+        return Math.toIntExact(Math.max(0, remainingDays));
     }
 }

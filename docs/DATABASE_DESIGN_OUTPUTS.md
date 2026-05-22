@@ -150,7 +150,7 @@ erDiagram
 - `UNIVERSITY_EMAIL_DOMAINS`(`domain_id` PK, `university_id` FK, `email_domain` UK)
 - `USER_ACCOUNT`(`user_id` PK, `university_id` FK, `email` UK, `password_hash`, `name`, `status`, `age`, `student_email`, `is_student_verified`)
 - `SCHOOL_EMAIL_VERIFICATION_CODE`(`verification_id` PK, `university_id` FK, `student_email`, `purpose`, `code_hash`, `expires_at`, `consumed_at`)
-- `USER_HEALTH_PROFILE`(`user_id` PK/FK, `height_cm`, `weight_kg`, `gender`, `bmi`, `target_weight_kg`, `activity_level`, `target_period_value`, `target_period_unit`)
+- `USER_HEALTH_PROFILE`(`user_id` PK/FK, `height_cm`, `weight_kg`, `gender`, `bmi`, `target_weight_kg`, `activity_level`, `target_period_value`, `target_period_unit`, `target_period_started_on`)
 - `AUTH_TOKEN_REVOCATION`(`token_jti` PK, `user_id` FK, `expires_at`)
 
 ### 음식 및 영양
@@ -195,7 +195,7 @@ erDiagram
 | 테이블 | 핵심 물리 속성 | 주요 제약 |
 |---|---|---|
 | `user_account` | `user_id bigint`, `email varchar(255)`, `password_hash varchar(255)`, `age int`, `is_student_verified tinyint(1)` | `email` UNIQUE, `age` 1~120 |
-| `user_health_profile` | `user_id bigint`, `height_cm decimal(5,2)`, `weight_kg decimal(5,2)`, `bmi decimal(5,2)`, `target_weight_kg decimal(5,2)` | `user_id` PK/FK, 사용자당 1개 프로필 |
+| `user_health_profile` | `user_id bigint`, `height_cm decimal(5,2)`, `weight_kg decimal(5,2)`, `bmi decimal(5,2)`, `target_weight_kg decimal(5,2)`, `target_period_started_on date` | `user_id` PK/FK, 사용자당 1개 프로필 |
 | `meal_log` | `meal_log_id bigint`, `user_id bigint`, `log_date date`, `meal_type varchar(30)` | `(user_id, meal_type, log_date)` UNIQUE |
 | `meal_log_item` | `meal_log_item_id bigint`, `meal_log_id bigint`, `food_id bigint`, `amount_g decimal(8,2)`, `is_excluded tinyint(1)` | `meal_log_id` FK, `amount_g > 0` |
 | `food` | `food_id bigint`, `source_name varchar(100)`, `source_food_code varchar(100)`, `food_name varchar(255)`, `default_serving_g decimal(8,2)`, 영양값 `decimal(12,4)` | `(source_name, source_food_code)` UNIQUE, `default_serving_g > 0` |
