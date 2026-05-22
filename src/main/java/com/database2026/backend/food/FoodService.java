@@ -369,12 +369,7 @@ public class FoodService {
         if (localItems.isEmpty()) {
             return true;
         }
-        if (localItems.size() >= safeLimit) {
-            return false;
-        }
-        String queryKey = compactQuery(normalizedQuery);
-        return localItems.stream()
-                .allMatch(item -> compactQuery(foodNameDeduplicationKey(item.foodName())).equals(queryKey));
+        return localItems.size() < safeLimit;
     }
 
     private int importPublicNutritionRows(String query, int limit) {
