@@ -169,7 +169,7 @@ erDiagram
 - `DINING_PLACE`(`dining_place_id` PK, `university_id` FK, `dining_place_name`, `dining_place_type`, `menu_source_url`, `is_active`)
 - `MENU_CATEGORY`(`category_id` PK, `category_code` UK, `category_name`, `sort_order`)
 - `CAFETERIA_MENU`(`menu_id` PK, `dining_place_id` FK, `served_date`, `meal_type`)
-- `CAFETERIA_MENU_OPTION`(`option_id` PK, `menu_id` FK, `category_id` FK, `option_name`, `source_label`, `is_available`, `calories_kcal`, `carb_g`, `protein_g`, `fat_g`, `sugar_g`, `sodium_mg`)
+- `CAFETERIA_MENU_OPTION`(`option_id` PK, `menu_id` FK, `category_id` FK, `option_name`, `source_label`, `is_available`, `calories_kcal`)
 - `CAFETERIA_MENU_ITEM`(`menu_item_id` PK, `option_id` FK, `food_id` FK, `raw_item_name`, `amount_g`)
 
 ### 논리적 변환 근거
@@ -200,7 +200,7 @@ erDiagram
 | `meal_log_item` | `meal_log_item_id bigint`, `meal_log_id bigint`, `food_id bigint`, `amount_g decimal(8,2)`, `is_excluded tinyint(1)` | `meal_log_id` FK, `amount_g > 0` |
 | `food` | `food_id bigint`, `source_name varchar(100)`, `source_food_code varchar(100)`, `food_name varchar(255)`, `default_serving_g decimal(8,2)`, 영양값 `decimal(12,4)` | `(source_name, source_food_code)` UNIQUE, `default_serving_g > 0` |
 | `cafeteria_menu` | `menu_id bigint`, `dining_place_id bigint`, `served_date date`, `meal_type varchar(30)` | `(dining_place_id, meal_type, served_date)` UNIQUE |
-| `cafeteria_menu_option` | `option_id bigint`, `menu_id bigint`, `category_id bigint`, `option_name varchar(255)`, 영양 합계 `decimal(10,2)` | `(menu_id, option_name)` UNIQUE |
+| `cafeteria_menu_option` | `option_id bigint`, `menu_id bigint`, `category_id bigint`, `option_name varchar(255)`, `calories_kcal decimal(10,2)` | `(menu_id, option_name)` UNIQUE |
 | `cafeteria_menu_item` | `menu_item_id bigint`, `option_id bigint`, `food_id bigint null`, `raw_item_name varchar(255)`, `amount_g decimal(8,2)` | `food_id` nullable, `amount_g > 0` |
 ### 주요 인덱스
 
@@ -213,5 +213,5 @@ erDiagram
 ### 유도 속성 및 저장 이유
 
 - `user_health_profile.bmi`: 키와 몸무게로 계산되는 유도 속성이다. 프로필 조회와 권장 섭취량 계산에서 반복 사용되므로 저장한다.
-- `cafeteria_menu_option.calories_kcal`, `carb_g`, `protein_g`, `fat_g`, `sugar_g`, `sodium_mg`: 메뉴 옵션에 포함된 항목들의 영양 합계다. 학교 메뉴 비교 화면에서 빠르게 표시하기 위해 옵션 단위 집계값을 저장할 수 있게 했다.
+- `cafeteria_menu_option.calories_kcal`: 생활관 PDF나 크롤링 원문에서 옵션 단위 칼로리가 제공되는 경우를 보존하기 위해 저장한다. 탄수화물, 단백질, 지방, 당류, 나트륨은 `cafeteria_menu_item`과 `food`를 조인해 조회 시점에 계산한다.
 - 하루 영양 합계: `meal_log_item`과 `food`를 조인해 조회 시점에 계산한다. 식단 수정이 잦기 때문에 별도 저장하면 동기화 비용이 커진다.

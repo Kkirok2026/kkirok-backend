@@ -121,6 +121,7 @@ erDiagram
         varchar option_name
         varchar source_label
         boolean is_available
+        decimal calories_kcal
     }
 
     CAFETERIA_MENU_ITEM {
@@ -190,7 +191,7 @@ erDiagram
 - `cafeteria_menu`, `dining_place`, `cafeteria_menu_option`, `menu_category`는 학교/식당/날짜/끼니/옵션 정보를 분리해 저장한다.
 - `cafeteria_menu_item`은 옵션에 포함된 음식별 원문 메뉴 항목을 한 row씩 저장하고, 가능한 경우 `food`와 연결한다. 한 줄 복합 메뉴는 `/`, 줄바꿈, 쉼표 기준으로 분리해 저장한다.
 - `food`는 표준 음식의 100g 기준 영양값만 저장한다.
-- `v_menu_option_comparison`은 비교 API가 쓰기 쉬운 읽기 전용 결과를 제공한다. 옵션 자체에 영양값이 있으면 그 값을 우선 사용하고, 없으면 메뉴 항목과 `food`를 조인해 옵션 단위 영양 합계를 계산한다.
+- `v_menu_option_comparison`은 비교 API가 쓰기 쉬운 읽기 전용 결과를 제공한다. 옵션 자체에 칼로리값이 있으면 그 값을 우선 사용하고, 나머지 영양값은 메뉴 항목과 `food`를 조인해 옵션 단위 합계를 계산한다.
 
 ## 핵심 제약
 

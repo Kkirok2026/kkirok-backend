@@ -17,6 +17,8 @@ import org.springframework.stereotype.Component;
 public class MenuFoodMatcher {
 
     private static final int PUBLIC_NUTRITION_MENU_SEARCH_LIMIT = 10;
+    private static final BigDecimal DEFAULT_MENU_ITEM_AMOUNT_G = BigDecimal.valueOf(100);
+    private static final BigDecimal MAX_REASONABLE_MENU_ITEM_AMOUNT_G = BigDecimal.valueOf(1000);
 
     private final JdbcTemplate jdbcTemplate;
     private final FoodService foodService;
@@ -59,7 +61,7 @@ public class MenuFoodMatcher {
                 jdbcTemplate.update("""
                         insert into cafeteria_menu_item (option_id, food_id, raw_item_name, amount_g)
                         values (?, null, ?, ?)
-                        """, item.optionId(), rawItemName, BigDecimal.valueOf(100));
+                        """, item.optionId(), rawItemName, DEFAULT_MENU_ITEM_AMOUNT_G);
             }
         }
     }
@@ -103,9 +105,9 @@ public class MenuFoodMatcher {
 
     public BigDecimal servingAmount(Long foodId) {
         if (foodId == null) {
-            return BigDecimal.valueOf(100);
+            return DEFAULT_MENU_ITEM_AMOUNT_G;
         }
-        return defaultServingByFoodId().getOrDefault(foodId, BigDecimal.valueOf(100));
+        return safeServingAmount(defaultServingByFoodId().get(foodId));
     }
 
     private Long matchLocalFood(String rawItemName) {
@@ -215,5 +217,14 @@ public class MenuFoodMatcher {
     }
 
     private record CompositeMenuItemRow(long optionId, long menuItemId, String rawItemName) {
+    }
+
+    private BigDecimal safeServingAmount(BigDecimal amountG) {
+        if (amountG == null
+                || amountG.compareTo(BigDecimal.ZERO) <= 0
+                || amountG.compareTo(MAX_REASONABLE_MENU_ITEM_AMOUNT_G) > 0) {
+            return DEFAULT_MENU_ITEM_AMOUNT_G;
+        }
+        return amountG;
     }
 }

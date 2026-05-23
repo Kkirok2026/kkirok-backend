@@ -14,6 +14,7 @@ import com.database2026.backend.meal.MealDtos.MealLogResponse;
 import com.database2026.backend.meal.MealDtos.MenuOptionMealLogAddRequest;
 import com.database2026.backend.meal.MealDtos.NutritionWarning;
 import com.database2026.backend.meal.MealDtos.RecommendedNutritionTargets;
+import com.database2026.backend.menu.MenuFoodMatcher;
 import com.database2026.backend.support.SqlSupport;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -38,10 +39,12 @@ public class MealService {
 
     private final JdbcTemplate jdbcTemplate;
     private final SqlSupport sqlSupport;
+    private final MenuFoodMatcher menuFoodMatcher;
 
-    public MealService(JdbcTemplate jdbcTemplate, SqlSupport sqlSupport) {
+    public MealService(JdbcTemplate jdbcTemplate, SqlSupport sqlSupport, MenuFoodMatcher menuFoodMatcher) {
         this.jdbcTemplate = jdbcTemplate;
         this.sqlSupport = sqlSupport;
+        this.menuFoodMatcher = menuFoodMatcher;
     }
 
     @Transactional
@@ -63,6 +66,7 @@ public class MealService {
     public MealLogResponse addMenuOption(long userId, MenuOptionMealLogAddRequest request) {
         MenuOptionContext option = menuOptionContext(request.menuOptionId());
         assertUserCanUseMenuOption(userId, option.universityId());
+        menuFoodMatcher.resolveMissingMenuItems(option.universityId(), option.servedDate(), option.mealType());
         long mealLogId = findMealLogId(userId, option.servedDate(), option.mealType())
                 .orElseGet(() -> createMealLog(userId, option.servedDate(), option.mealType(), request.memo()));
         assertMenuOptionNotAlreadyAdded(mealLogId, option.optionId());
@@ -185,17 +189,14 @@ public class MealService {
     }
 
     private void insertMenuOptionItems(long mealLogId, MenuOptionContext option) {
-        if (option.hasOptionNutrients()) {
-            insertMealLogItem(mealLogId, null, option.optionId(), option.optionName(), BigDecimal.valueOf(100));
-            return;
-        }
         List<CafeteriaMenuItem> menuItems = cafeteriaMenuItems(option.optionId());
-        if (menuItems.isEmpty()) {
+        if (menuItems.isEmpty() || (option.hasOptionCalories() && menuItems.stream().noneMatch(item -> item.foodId() != null))) {
             insertMealLogItem(mealLogId, null, option.optionId(), option.optionName(), BigDecimal.valueOf(100));
             return;
         }
         for (CafeteriaMenuItem item : menuItems) {
-            insertMealLogItem(mealLogId, item.foodId(), option.optionId(), item.rawItemName(), item.amountG());
+            Long sourceMenuOptionId = option.hasOptionCalories() && item.foodId() == null ? null : option.optionId();
+            insertMealLogItem(mealLogId, item.foodId(), sourceMenuOptionId, item.rawItemName(), item.amountG());
         }
     }
 
@@ -247,14 +248,9 @@ public class MealService {
                                m.served_date,
                                m.meal_type,
                                case when o.calories_kcal is not null
-                                      or o.carb_g is not null
-                                      or o.protein_g is not null
-                                      or o.fat_g is not null
-                                      or o.sugar_g is not null
-                                      or o.sodium_mg is not null
                                     then true
                                     else false
-                               end as has_option_nutrients
+                               end as has_option_calories
                         from cafeteria_menu_option o
                         join cafeteria_menu m on m.menu_id = o.menu_id
                         join dining_place dp on dp.dining_place_id = m.dining_place_id
@@ -268,7 +264,7 @@ public class MealService {
                         rs.getLong("university_id"),
                         rs.getObject("served_date", LocalDate.class),
                         rs.getString("meal_type"),
-                        rs.getBoolean("has_option_nutrients")
+                        rs.getBoolean("has_option_calories")
                 ),
                 optionId
         ).stream().findFirst().orElseThrow(() -> DomainException.notFound("MENU_OPTION_NOT_FOUND", "식당 메뉴를 찾을 수 없습니다."));
@@ -772,7 +768,7 @@ public class MealService {
             Long universityId,
             LocalDate servedDate,
             String mealType,
-            Boolean hasOptionNutrients
+            Boolean hasOptionCalories
     ) {
     }
 

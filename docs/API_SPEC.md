@@ -175,7 +175,7 @@
 
 `GET /menus/compare?universityId=2&date=2026-05-11&mealType=LUNCH`
 
-`Authorization: Bearer <access_token>`이 필요하다. 일반 사용자는 `SCHOOL_EMAIL_USER_REQUIRED` 오류를 받으며, 자신의 학교가 아닌 대학교의 메뉴 비교는 `UNIVERSITY_SELECTION_MISMATCH` 오류를 받는다. 응답의 각 옵션은 `v_menu_option_comparison` view를 통해 내려간다. 이 view는 옵션 자체에 저장된 영양값이 있으면 그 값을 우선 사용하고, 없으면 요청 시점에 `cafeteria_menu_item`과 식약처 음식 영양값을 조인해 `caloriesKcal`, `carbG`, `proteinG`, `fatG`, `sugarG`, `sodiumMg` 합계를 계산한다.
+`Authorization: Bearer <access_token>`이 필요하다. 일반 사용자는 `SCHOOL_EMAIL_USER_REQUIRED` 오류를 받으며, 자신의 학교가 아닌 대학교의 메뉴 비교는 `UNIVERSITY_SELECTION_MISMATCH` 오류를 받는다. 응답의 각 옵션은 `v_menu_option_comparison` view를 통해 내려간다. 이 view는 옵션 자체에 저장된 `caloriesKcal`이 있으면 그 값을 우선 사용하고, 없으면 `cafeteria_menu_item`과 식약처 음식 영양값을 조인해 계산한다. `carbG`, `proteinG`, `fatG`, `sugarG`, `sodiumMg`는 요청 시점에 메뉴 항목과 음식 영양값을 조인해 합계를 계산한다.
 
 사용자가 학생식당 메뉴를 하나 선택한 뒤 생활관식당과 비교할 때는 `studentOptionId`를 함께 보낸다.
 

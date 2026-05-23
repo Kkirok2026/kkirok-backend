@@ -29,6 +29,8 @@ import org.springframework.stereotype.Component;
 @Component
 class PublicNutritionApiClient {
 
+    private static final BigDecimal DEFAULT_BASIS_AMOUNT_G = BigDecimal.valueOf(100);
+    private static final BigDecimal MAX_REASONABLE_BASIS_AMOUNT_G = BigDecimal.valueOf(1000);
     private static final Pattern FIRST_NUMBER = Pattern.compile("-?\\d+(?:\\.\\d+)?");
     private static final Pattern PORTAL_TABLE_ROW = Pattern.compile("<tr\\s+class=\"contentsTr\"[^>]*>(.*?)</tr>", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
     private static final Pattern PORTAL_TABLE_CELL = Pattern.compile("<td[^>]*>(.*?)</td>", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
@@ -187,7 +189,7 @@ class PublicNutritionApiClient {
     }
 
     private NutritionRow nutritionRow(JsonNode node) {
-        BigDecimal basisG = positiveOrDefault(amount(node, "nutConSrtrQua", "영양성분함량기준량"), BigDecimal.valueOf(100));
+        BigDecimal basisG = nutritionBasisAmount(amount(node, "nutConSrtrQua", "영양성분함량기준량"));
         BigDecimal totalWeightG = positiveAmount(amount(node, "foodSize", "식품중량"));
         return new NutritionRow(
                 text(node, "foodCd", "식품코드"),
@@ -207,7 +209,7 @@ class PublicNutritionApiClient {
         if (cells.size() < 34) {
             return new NutritionRow(null, null, null, null, null, null, null, null, null, null);
         }
-        BigDecimal basisG = positiveOrDefault(amount(cells.get(5)), BigDecimal.valueOf(100));
+        BigDecimal basisG = nutritionBasisAmount(amount(cells.get(5)));
         BigDecimal totalWeightG = positiveAmount(amount(cells.get(33)));
         return new NutritionRow(
                 cells.get(0),
@@ -369,6 +371,14 @@ class PublicNutritionApiClient {
 
     private BigDecimal positiveOrDefault(BigDecimal value, BigDecimal defaultValue) {
         return value == null || value.compareTo(BigDecimal.ZERO) <= 0 ? defaultValue : value;
+    }
+
+    private BigDecimal nutritionBasisAmount(BigDecimal value) {
+        BigDecimal amount = positiveOrDefault(value, DEFAULT_BASIS_AMOUNT_G);
+        if (amount.compareTo(MAX_REASONABLE_BASIS_AMOUNT_G) > 0) {
+            return DEFAULT_BASIS_AMOUNT_G;
+        }
+        return amount;
     }
 
     private BigDecimal positiveAmount(BigDecimal value) {

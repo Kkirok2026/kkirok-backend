@@ -258,6 +258,33 @@ class ServiceFlowIntegrationTests {
         assertThat(rawItems).containsExactly("단호박콘샐러드", "옥수수수염차");
     }
 
+    @Test
+    void addingCalorieMenuOptionStillStoresSplitMatchedItems() throws Exception {
+        LocalDate servedDate = LocalDate.of(2026, 7, 1);
+        seedCompositeCalorieMenuOption(servedDate, "도토리묵사발 / 쌀밥 / 깍두기", new BigDecimal("730.00"));
+
+        String token = login("test@inha.edu", "test");
+
+        JsonNode addedMenu = postOk("/api/v1/meal-logs/from-menu-option", token, """
+                {
+                  "menuOptionId": %d,
+                  "memo": "생활관 메뉴 추가"
+                }
+                """.formatted(TEST_COMPOSITE_OPTION_ID));
+
+        JsonNode items = addedMenu.at("/data/items");
+        assertThat(foodNames(items)).contains("도토리묵사발", "쌀밥", "깍두기");
+        assertThat(foodNames(items)).doesNotContain("도토리묵사발 / 쌀밥 / 깍두기");
+
+        for (JsonNode item : items) {
+            assertThat(item.at("/amountG").decimalValue()).isLessThanOrEqualTo(new BigDecimal("1000.00"));
+            if ("쌀밥".equals(item.at("/itemName").asText())) {
+                assertThat(item.at("/foodId").isNull()).isFalse();
+                assertThat(item.at("/nutrients/caloriesKcal").decimalValue()).isGreaterThan(BigDecimal.ZERO);
+            }
+        }
+    }
+
     private void seedStudentMenuOptionForComparison() {
         jdbcTemplate.update("delete from cafeteria_menu_item where option_id = ?", TEST_STUDENT_OPTION_ID);
         jdbcTemplate.update("delete from cafeteria_menu_option where option_id = ?", TEST_STUDENT_OPTION_ID);
@@ -277,6 +304,7 @@ class ServiceFlowIntegrationTests {
     }
 
     private void seedCompositeMenuOption(LocalDate servedDate, String optionName) {
+        deleteMealLogItemsForOption(TEST_COMPOSITE_OPTION_ID);
         jdbcTemplate.update("delete from cafeteria_menu_item where option_id = ?", TEST_COMPOSITE_OPTION_ID);
         jdbcTemplate.update("delete from cafeteria_menu_option where option_id = ?", TEST_COMPOSITE_OPTION_ID);
         jdbcTemplate.update("delete from cafeteria_menu where menu_id = ?", TEST_COMPOSITE_MENU_ID);
@@ -292,6 +320,45 @@ class ServiceFlowIntegrationTests {
                 insert into cafeteria_menu_item (option_id, food_id, raw_item_name, amount_g)
                 values (?, null, ?, 100.00)
                 """, TEST_COMPOSITE_OPTION_ID, optionName);
+    }
+
+    private void seedCompositeCalorieMenuOption(LocalDate servedDate, String optionName, BigDecimal caloriesKcal) {
+        jdbcTemplate.update("delete from meal_log where user_id = 1001 and log_date = ? and meal_type = 'LUNCH'", servedDate);
+        deleteMealLogItemsForOption(TEST_COMPOSITE_OPTION_ID);
+        seedRiceFoodForMenuMatching();
+        jdbcTemplate.update("delete from cafeteria_menu_item where option_id = ?", TEST_COMPOSITE_OPTION_ID);
+        jdbcTemplate.update("delete from cafeteria_menu_option where option_id = ?", TEST_COMPOSITE_OPTION_ID);
+        jdbcTemplate.update("delete from cafeteria_menu where menu_id = ?", TEST_COMPOSITE_MENU_ID);
+        jdbcTemplate.update("""
+                insert into cafeteria_menu (menu_id, dining_place_id, meal_type, served_date)
+                values (?, 3, 'LUNCH', ?)
+                """, TEST_COMPOSITE_MENU_ID, servedDate);
+        jdbcTemplate.update("""
+                insert into cafeteria_menu_option (option_id, menu_id, category_id, option_name, source_label, calories_kcal)
+                values (?, ?, (select min(category_id) from menu_category), ?, '통합 테스트 생활관 메뉴', ?)
+                """, TEST_COMPOSITE_OPTION_ID, TEST_COMPOSITE_MENU_ID, optionName, caloriesKcal);
+        jdbcTemplate.update("""
+                insert into cafeteria_menu_item (option_id, food_id, raw_item_name, amount_g)
+                values (?, null, ?, 100.00)
+                """, TEST_COMPOSITE_OPTION_ID, optionName);
+    }
+
+    private void deleteMealLogItemsForOption(long optionId) {
+        jdbcTemplate.update("delete from meal_log_item where source_menu_option_id = ?", optionId);
+    }
+
+    private void seedRiceFoodForMenuMatching() {
+        jdbcTemplate.update("delete from food where source_food_code = 'TEST-RICE'");
+        jdbcTemplate.update("""
+                insert into food (
+                    source_name, source_food_code, food_name, default_serving_g,
+                    nutrition_basis_amount_g, total_weight_g,
+                    calories_kcal, carb_g, protein_g, fat_g, sugar_g, sodium_mg
+                )
+                values ('NATIONAL_INTEGRATED', 'TEST-RICE', '쌀밥', 100.00,
+                        100.00, 250.00,
+                        120.00, 25.00, 2.00, 0.30, 0.00, 2.00)
+                """);
     }
 
     private void seedDuplicateFoods() {
@@ -358,7 +425,9 @@ class ServiceFlowIntegrationTests {
 
     private List<String> foodNames(JsonNode items) {
         List<String> names = new java.util.ArrayList<>();
-        items.forEach(item -> names.add(item.at("/foodName").asText()));
+        items.forEach(item -> names.add(
+                item.has("foodName") ? item.at("/foodName").asText() : item.at("/itemName").asText()
+        ));
         return names;
     }
 
