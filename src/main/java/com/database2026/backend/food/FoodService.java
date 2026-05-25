@@ -3,6 +3,7 @@ package com.database2026.backend.food;
 import com.database2026.backend.common.DomainException;
 import com.database2026.backend.common.NutrientTotals;
 import com.database2026.backend.food.FoodDtos.CustomFoodCreateRequest;
+import com.database2026.backend.food.FoodDtos.FoodCaloriesUpdateRequest;
 import com.database2026.backend.food.FoodDtos.FoodDetail;
 import com.database2026.backend.food.FoodDtos.FoodSearchResponse;
 import com.database2026.backend.food.FoodDtos.FoodSuggestionResponse;
@@ -35,6 +36,9 @@ public class FoodService {
     private static final BigDecimal CARB_KCAL_PER_G = BigDecimal.valueOf(4);
     private static final BigDecimal PROTEIN_KCAL_PER_G = BigDecimal.valueOf(4);
     private static final BigDecimal FAT_KCAL_PER_G = BigDecimal.valueOf(9);
+
+    private record FoodCalorieTarget(String sourceName, BigDecimal basisAmountG, BigDecimal totalWeightG) {
+    }
 
     private final JdbcTemplate jdbcTemplate;
     private final SqlSupport sqlSupport;
@@ -105,17 +109,30 @@ public class FoodService {
         String foodName = normalizeFoodName(request.foodName());
         String normalizedFoodName = normalizedCustomFoodName(foodName);
         BigDecimal amountG = customFoodAmount(request.amountG());
+        BigDecimal totalWeightG = customFoodAmount(Optional.ofNullable(request.totalWeightG()).orElse(amountG));
         long foodId = customFoodId(userId, normalizedFoodName)
-                .map(existingFoodId -> updateCustomFood(existingFoodId, userId, foodName, normalizedFoodName, amountG))
-                .orElseGet(() -> insertCustomFood(userId, foodName, normalizedFoodName, amountG));
+                .map(existingFoodId -> updateCustomFood(existingFoodId, userId, foodName, normalizedFoodName, amountG, totalWeightG))
+                .orElseGet(() -> insertCustomFood(userId, foodName, normalizedFoodName, amountG, totalWeightG));
         insertAlias(foodId, foodName);
-        upsertNutrientValue(foodId, "CALORIES_KCAL", per100g(calculatedCaloriesKcal(request), amountG));
+        upsertNutrientValue(foodId, "CALORIES_KCAL", customCaloriesPer100g(request, amountG, totalWeightG));
         upsertNutrientValue(foodId, "CARB_G", per100g(request.carbG(), amountG));
         upsertNutrientValue(foodId, "PROTEIN_G", per100g(request.proteinG(), amountG));
         upsertNutrientValue(foodId, "FAT_G", per100g(request.fatG(), amountG));
         upsertNutrientValue(foodId, "SUGAR_G", per100g(optionalAmount(request.sugarG()), amountG));
         upsertNutrientValue(foodId, "SODIUM_MG", per100g(optionalAmount(request.sodiumMg()), amountG));
         return foodSummary(foodId, userId);
+    }
+
+    @Transactional
+    public FoodDetail updateCalories(long userId, long foodId, FoodCaloriesUpdateRequest request) {
+        FoodCalorieTarget target = calorieTarget(foodId);
+        if (USER_CUSTOM_SOURCE_NAME.equals(target.sourceName())) {
+            assertCustomFoodOwner(userId, foodId);
+        }
+
+        BigDecimal per100gCalories = caloriesPer100g(request, target);
+        jdbcTemplate.update("update food set calories_kcal = ? where food_id = ?", per100gCalories, foodId);
+        return foodDetailAnySource(foodId);
     }
 
     private List<FoodSummary> searchLocal(List<String> searchQueries, int safeLimit, Long userId) {
@@ -479,19 +496,32 @@ public class FoodService {
         ).stream().findFirst();
     }
 
-    private long insertCustomFood(long userId, String foodName, String normalizedFoodName, BigDecimal amountG) {
+    private long insertCustomFood(
+            long userId,
+            String foodName,
+            String normalizedFoodName,
+            BigDecimal amountG,
+            BigDecimal totalWeightG
+    ) {
         long foodId = sqlSupport.insert("""
                 insert into food (source_name, source_food_code, food_name, default_serving_g, nutrition_basis_amount_g, total_weight_g)
                 values (?, ?, ?, ?, ?, ?)
-                """, USER_CUSTOM_SOURCE_NAME, customFoodCode(userId), foodName, amountG, amountG, amountG);
+                """, USER_CUSTOM_SOURCE_NAME, customFoodCode(userId), foodName, totalWeightG, amountG, totalWeightG);
         sqlSupport.update("""
                 insert into user_custom_food (user_id, food_id, food_name, normalized_food_name, serving_amount_g)
                 values (?, ?, ?, ?, ?)
-                """, userId, foodId, foodName, normalizedFoodName, amountG);
+                """, userId, foodId, foodName, normalizedFoodName, totalWeightG);
         return foodId;
     }
 
-    private long updateCustomFood(long foodId, long userId, String foodName, String normalizedFoodName, BigDecimal amountG) {
+    private long updateCustomFood(
+            long foodId,
+            long userId,
+            String foodName,
+            String normalizedFoodName,
+            BigDecimal amountG,
+            BigDecimal totalWeightG
+    ) {
         jdbcTemplate.update("""
                 update food
                 set food_name = ?,
@@ -500,7 +530,7 @@ public class FoodService {
                     total_weight_g = ?
                 where food_id = ?
                   and source_name = ?
-                """, foodName, amountG, amountG, amountG, foodId, USER_CUSTOM_SOURCE_NAME);
+                """, foodName, totalWeightG, amountG, totalWeightG, foodId, USER_CUSTOM_SOURCE_NAME);
         jdbcTemplate.update("""
                 update user_custom_food
                 set food_name = ?,
@@ -508,7 +538,7 @@ public class FoodService {
                     serving_amount_g = ?
                 where user_id = ?
                   and food_id = ?
-                """, foodName, normalizedFoodName, amountG, userId, foodId);
+                """, foodName, normalizedFoodName, totalWeightG, userId, foodId);
         return foodId;
     }
 
@@ -711,6 +741,103 @@ public class FoodService {
         ).stream().findFirst().orElseThrow(() -> DomainException.notFound("FOOD_NOT_FOUND", "음식을 찾을 수 없습니다."));
     }
 
+    private FoodDetail foodDetailAnySource(long foodId) {
+        return jdbcTemplate.query("""
+                        select f.food_id,
+                               f.source_name,
+                               f.source_food_code,
+                               f.food_name,
+                               f.default_serving_g,
+                               f.nutrition_basis_amount_g,
+                               f.total_weight_g,
+                               coalesce(f.calories_kcal * f.default_serving_g / 100, 0) as calories_kcal,
+                               coalesce(f.carb_g * f.default_serving_g / 100, 0) as carb_g,
+                               coalesce(f.protein_g * f.default_serving_g / 100, 0) as protein_g,
+                               coalesce(f.fat_g * f.default_serving_g / 100, 0) as fat_g,
+                               coalesce(f.sugar_g * f.default_serving_g / 100, 0) as sugar_g,
+                               coalesce(f.sodium_mg * f.default_serving_g / 100, 0) as sodium_mg,
+                               coalesce(f.calories_kcal * f.nutrition_basis_amount_g / 100, 0) as basis_calories_kcal,
+                               coalesce(f.carb_g * f.nutrition_basis_amount_g / 100, 0) as basis_carb_g,
+                               coalesce(f.protein_g * f.nutrition_basis_amount_g / 100, 0) as basis_protein_g,
+                               coalesce(f.fat_g * f.nutrition_basis_amount_g / 100, 0) as basis_fat_g,
+                               coalesce(f.sugar_g * f.nutrition_basis_amount_g / 100, 0) as basis_sugar_g,
+                               coalesce(f.sodium_mg * f.nutrition_basis_amount_g / 100, 0) as basis_sodium_mg,
+                               coalesce(f.calories_kcal * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_calories_kcal,
+                               coalesce(f.carb_g * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_carb_g,
+                               coalesce(f.protein_g * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_protein_g,
+                               coalesce(f.fat_g * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_fat_g,
+                               coalesce(f.sugar_g * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_sugar_g,
+                               coalesce(f.sodium_mg * coalesce(f.total_weight_g, f.nutrition_basis_amount_g) / 100, 0) as total_sodium_mg
+                        from food f
+                        where f.food_id = ?
+                        group by f.food_id, f.source_name, f.source_food_code, f.food_name, f.default_serving_g,
+                                 f.nutrition_basis_amount_g, f.total_weight_g,
+                                 f.calories_kcal, f.carb_g, f.protein_g, f.fat_g, f.sugar_g, f.sodium_mg
+                        """,
+                (rs, rowNum) -> new FoodDetail(
+                        rs.getLong("food_id"),
+                        rs.getString("source_name"),
+                        rs.getString("source_food_code"),
+                        rs.getString("food_name"),
+                        rs.getBigDecimal("default_serving_g"),
+                        rs.getBigDecimal("nutrition_basis_amount_g"),
+                        rs.getBigDecimal("total_weight_g"),
+                        NutrientTotals.from(rs),
+                        nutrients(rs, "basis_"),
+                        nutrients(rs, "total_")
+                ),
+                foodId
+        ).stream().findFirst().orElseThrow(() -> DomainException.notFound("FOOD_NOT_FOUND", "음식을 찾을 수 없습니다."));
+    }
+
+    private FoodCalorieTarget calorieTarget(long foodId) {
+        return jdbcTemplate.query("""
+                        select source_name,
+                               coalesce(nutrition_basis_amount_g, ?) as basis_amount_g,
+                               coalesce(total_weight_g, nutrition_basis_amount_g, default_serving_g, ?) as total_weight_g
+                        from food
+                        where food_id = ?
+                        """,
+                (rs, rowNum) -> new FoodCalorieTarget(
+                        rs.getString("source_name"),
+                        rs.getBigDecimal("basis_amount_g"),
+                        rs.getBigDecimal("total_weight_g")
+                ),
+                DEFAULT_CUSTOM_FOOD_AMOUNT_G,
+                DEFAULT_CUSTOM_FOOD_AMOUNT_G,
+                foodId
+        ).stream().findFirst().orElseThrow(() -> DomainException.notFound("FOOD_NOT_FOUND", "음식을 찾을 수 없습니다."));
+    }
+
+    private void assertCustomFoodOwner(long userId, long foodId) {
+        Integer count = jdbcTemplate.queryForObject("""
+                        select count(*)
+                        from user_custom_food
+                        where user_id = ?
+                          and food_id = ?
+                        """,
+                Integer.class,
+                userId,
+                foodId
+        );
+        if (count == null || count == 0) {
+            throw DomainException.notFound("FOOD_NOT_FOUND", "음식을 찾을 수 없습니다.");
+        }
+    }
+
+    private BigDecimal caloriesPer100g(FoodCaloriesUpdateRequest request, FoodCalorieTarget target) {
+        BigDecimal basisCalories = request.basisCaloriesKcal();
+        BigDecimal totalCalories = request.totalCaloriesKcal();
+
+        if (basisCalories == null && totalCalories == null) {
+            throw DomainException.badRequest("FOOD_CALORIES_REQUIRED", "수정할 열량을 입력해 주세요.");
+        }
+        if (basisCalories != null) {
+            return per100g(nonNegativeAmount(basisCalories), target.basisAmountG());
+        }
+        return per100g(nonNegativeAmount(totalCalories), target.totalWeightG());
+    }
+
     private NutrientTotals nutrients(ResultSet rs, String prefix) throws SQLException {
         return new NutrientTotals(
                 value(rs, prefix + "calories_kcal"),
@@ -784,6 +911,19 @@ public class FoodService {
         return nonNegativeAmount(request.carbG()).multiply(CARB_KCAL_PER_G)
                 .add(nonNegativeAmount(request.proteinG()).multiply(PROTEIN_KCAL_PER_G))
                 .add(nonNegativeAmount(request.fatG()).multiply(FAT_KCAL_PER_G));
+    }
+
+    private BigDecimal customCaloriesPer100g(CustomFoodCreateRequest request, BigDecimal amountG, BigDecimal totalWeightG) {
+        if (request.basisCaloriesKcal() != null) {
+            return nonNegativeAmount(request.basisCaloriesKcal());
+        }
+        if (request.totalCaloriesKcal() != null) {
+            return per100g(nonNegativeAmount(request.totalCaloriesKcal()), totalWeightG);
+        }
+        if (request.caloriesKcal() != null) {
+            return per100g(nonNegativeAmount(request.caloriesKcal()), amountG);
+        }
+        return per100g(calculatedCaloriesKcal(request), amountG);
     }
 
     private BigDecimal nonNegativeAmount(BigDecimal amount) {

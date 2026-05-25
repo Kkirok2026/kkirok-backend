@@ -4,6 +4,7 @@ import com.database2026.backend.common.NutrientTotals;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotEmpty;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Positive;
@@ -51,6 +52,12 @@ public final class MealDtos {
     @Schema(description = "식단 항목의 실제 섭취량 수정 요청")
     public record MealLogItemAmountUpdateRequest(
             @NotNull @Positive @Schema(description = "사용자가 먹은 양(g)", example = "150") BigDecimal amountG
+    ) {
+    }
+
+    @Schema(description = "식단 합산 열량 임시 보정 요청")
+    public record MealLogCaloriesUpdateRequest(
+            @NotNull @DecimalMin("0.0") @Schema(description = "식단 합산 목표 열량(kcal)", example = "730") BigDecimal caloriesKcal
     ) {
     }
 

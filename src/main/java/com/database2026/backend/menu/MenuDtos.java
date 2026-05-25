@@ -1,6 +1,10 @@
 package com.database2026.backend.menu;
 
 import com.database2026.backend.common.NutrientTotals;
+import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.NotNull;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -75,6 +79,12 @@ public final class MenuDtos {
             String categoryName,
             String optionName,
             NutrientTotals nutrients
+    ) {
+    }
+
+    @Schema(description = "식당 메뉴 옵션 열량 임시 보정 요청")
+    public record MenuOptionCaloriesUpdateRequest(
+            @NotNull @DecimalMin("0.0") @Schema(description = "메뉴 옵션 기준 열량(kcal)", example = "730") BigDecimal caloriesKcal
     ) {
     }
 }

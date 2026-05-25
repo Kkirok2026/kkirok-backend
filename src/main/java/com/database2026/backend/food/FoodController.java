@@ -3,6 +3,7 @@ package com.database2026.backend.food;
 import com.database2026.backend.auth.JwtAuthService;
 import com.database2026.backend.common.ApiResponse;
 import com.database2026.backend.food.FoodDtos.CustomFoodCreateRequest;
+import com.database2026.backend.food.FoodDtos.FoodCaloriesUpdateRequest;
 import com.database2026.backend.food.FoodDtos.FoodDetail;
 import com.database2026.backend.food.FoodDtos.FoodSearchResponse;
 import com.database2026.backend.food.FoodDtos.FoodSuggestionResponse;
@@ -14,6 +15,7 @@ import java.util.Optional;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -73,6 +75,17 @@ public class FoodController {
     ) {
         long userId = jwtAuthService.requireUserId(authorization);
         return ApiResponse.success(foodService.createCustomFood(userId, request));
+    }
+
+    @PatchMapping("/{foodId}/calories")
+    @Operation(summary = "음식 열량 수정")
+    ApiResponse<FoodDetail> updateCalories(
+            @RequestHeader(HttpHeaders.AUTHORIZATION) String authorization,
+            @PathVariable long foodId,
+            @Valid @RequestBody FoodCaloriesUpdateRequest request
+    ) {
+        long userId = jwtAuthService.requireUserId(authorization);
+        return ApiResponse.success(foodService.updateCalories(userId, foodId, request));
     }
 
     @GetMapping("/{foodId}")

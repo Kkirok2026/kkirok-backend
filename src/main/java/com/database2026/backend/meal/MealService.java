@@ -6,6 +6,7 @@ import com.database2026.backend.meal.MealDtos.DailySummaryResponse;
 import com.database2026.backend.meal.MealDtos.FoodMealLogItemRequest;
 import com.database2026.backend.meal.MealDtos.FoodMealLogItemsAddRequest;
 import com.database2026.backend.meal.MealDtos.MacroEnergyRatio;
+import com.database2026.backend.meal.MealDtos.MealLogCaloriesUpdateRequest;
 import com.database2026.backend.meal.MealDtos.MealLogCreateRequest;
 import com.database2026.backend.meal.MealDtos.MealLogItemAmountUpdateRequest;
 import com.database2026.backend.meal.MealDtos.MealLogItemResponse;
@@ -33,6 +34,7 @@ public class MealService {
 
     private static final String DEFAULT_ACTIVITY_LEVEL = "LOW_ACTIVE";
     private static final BigDecimal SODIUM_MAX_MG = BigDecimal.valueOf(2300);
+    private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
     private static final String TARGET_BASIS =
             "IOM DRI 성인 EER 공식 + 2025 한국인 영양소 섭취기준 에너지 적정비율"
                     + "(탄수화물 50-65%, 단백질 10-20%, 지방 15-30%, 총당류 20% 이내)";
@@ -110,6 +112,35 @@ public class MealService {
                 """, amountG, mealLogItemId, mealLogId, userId);
         if (updated == 0) {
             throw DomainException.notFound("MEAL_LOG_ITEM_NOT_FOUND", "식단 항목을 찾을 수 없습니다.");
+        }
+        return mealLog(userId, mealLogId);
+    }
+
+    @Transactional
+    public MealLogResponse updateCalories(long userId, long mealLogId, MealLogCaloriesUpdateRequest request) {
+        assertMealLogOwner(userId, mealLogId);
+        BigDecimal targetCalories = request.caloriesKcal();
+        if (targetCalories == null || targetCalories.compareTo(BigDecimal.ZERO) < 0) {
+            throw DomainException.badRequest("CALORIES_INVALID", "칼로리는 0 이상의 숫자로 입력해 주세요.");
+        }
+
+        NutrientTotals totals = entryTotals(mealLogId);
+        MealLogAdjustableItem item = firstAdjustableMealItem(mealLogId)
+                .orElseThrow(() -> DomainException.badRequest("MEAL_LOG_CALORIES_NOT_EDITABLE", "수정 가능한 식단 항목이 없습니다."));
+
+        BigDecimal desiredItemCalories = item.currentCaloriesKcal()
+                .add(targetCalories.subtract(totals.caloriesKcal()));
+        if (desiredItemCalories.compareTo(BigDecimal.ZERO) < 0) {
+            throw DomainException.badRequest("CALORIES_INVALID", "해당 식단의 칼로리를 이 값으로 낮출 수 없습니다.");
+        }
+
+        BigDecimal caloriesPer100g = desiredItemCalories
+                .multiply(HUNDRED)
+                .divide(item.amountG(), 4, RoundingMode.HALF_UP);
+        if (item.foodId() != null) {
+            jdbcTemplate.update("update food set calories_kcal = ? where food_id = ?", caloriesPer100g, item.foodId());
+        } else {
+            jdbcTemplate.update("update cafeteria_menu_option set calories_kcal = ? where option_id = ?", caloriesPer100g, item.sourceMenuOptionId());
         }
         return mealLog(userId, mealLogId);
     }
@@ -326,6 +357,7 @@ public class MealService {
                         from meal_log_item
                         where meal_log_id = ?
                           and source_menu_option_id = ?
+                          and is_excluded = false
                         """,
                 Integer.class,
                 mealLogId,
@@ -389,6 +421,37 @@ public class MealService {
                 },
                 mealLogId
         );
+    }
+
+    private Optional<MealLogAdjustableItem> firstAdjustableMealItem(long mealLogId) {
+        return jdbcTemplate.query("""
+                        select i.meal_log_item_id,
+                               i.food_id,
+                               i.source_menu_option_id,
+                               i.amount_g,
+                               case when i.food_id is not null
+                                    then coalesce(f.calories_kcal * i.amount_g / 100, 0)
+                                    else coalesce(o.calories_kcal * i.amount_g / 100, 0)
+                               end as calories_kcal
+                        from meal_log_item i
+                        left join v_menu_option_comparison o on o.option_id = i.source_menu_option_id
+                        left join food f on f.food_id = i.food_id
+                        where i.meal_log_id = ?
+                          and i.is_excluded = false
+                          and i.amount_g > 0
+                          and (i.food_id is not null or i.source_menu_option_id is not null)
+                        order by i.meal_log_item_id
+                        limit 1
+                        """,
+                (rs, rowNum) -> new MealLogAdjustableItem(
+                        rs.getLong("meal_log_item_id"),
+                        (Long) rs.getObject("food_id"),
+                        (Long) rs.getObject("source_menu_option_id"),
+                        rs.getBigDecimal("amount_g"),
+                        rs.getBigDecimal("calories_kcal")
+                ),
+                mealLogId
+        ).stream().findFirst();
     }
 
     private NutrientTotals entryTotals(long mealLogId) {
@@ -773,6 +836,15 @@ public class MealService {
     }
 
     private record CafeteriaMenuItem(Long foodId, String rawItemName, BigDecimal amountG) {
+    }
+
+    private record MealLogAdjustableItem(
+            Long mealLogItemId,
+            Long foodId,
+            Long sourceMenuOptionId,
+            BigDecimal amountG,
+            BigDecimal currentCaloriesKcal
+    ) {
     }
 
     private record UserUniversity(Long universityId) {

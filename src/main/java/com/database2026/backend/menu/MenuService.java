@@ -7,10 +7,12 @@ import com.database2026.backend.menu.MenuDtos.DiningPlaceItem;
 import com.database2026.backend.menu.MenuDtos.DiningPlaceListResponse;
 import com.database2026.backend.menu.MenuDtos.DiningPlaceMenu;
 import com.database2026.backend.menu.MenuDtos.MenuCompareResponse;
+import com.database2026.backend.menu.MenuDtos.MenuOptionCaloriesUpdateRequest;
 import com.database2026.backend.menu.MenuDtos.MenuOptionCompareItem;
 import com.database2026.backend.menu.MenuDtos.MenuOptionSummary;
 import com.database2026.backend.menu.MenuDtos.UniversityItem;
 import com.database2026.backend.menu.MenuDtos.UniversityListResponse;
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -21,6 +23,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class MenuService {
@@ -147,6 +150,17 @@ public class MenuService {
         }
     }
 
+    @Transactional
+    public MenuOptionCompareItem updateOptionCalories(long userId, long optionId, MenuOptionCaloriesUpdateRequest request) {
+        OptionUniversity optionUniversity = optionUniversity(optionId);
+        assertUserCanCompare(userId, optionUniversity.universityId());
+        if (request.caloriesKcal() == null || request.caloriesKcal().compareTo(BigDecimal.ZERO) < 0) {
+            throw DomainException.badRequest("CALORIES_INVALID", "칼로리는 0 이상의 숫자로 입력해 주세요.");
+        }
+        jdbcTemplate.update("update cafeteria_menu_option set calories_kcal = ? where option_id = ?", request.caloriesKcal(), optionId);
+        return menuOptionCompareItem(optionId);
+    }
+
     private List<MenuOptionRow> menuOptionRows(long universityId, LocalDate date, String mealTypeCode) {
         return jdbcTemplate.query("""
                         select dining_place_id,
@@ -187,6 +201,51 @@ public class MenuService {
                 date,
                 mealTypeCode
         );
+    }
+
+    private OptionUniversity optionUniversity(long optionId) {
+        return jdbcTemplate.query("""
+                        select dp.university_id
+                        from cafeteria_menu_option o
+                        join cafeteria_menu m on m.menu_id = o.menu_id
+                        join dining_place dp on dp.dining_place_id = m.dining_place_id
+                        where o.option_id = ?
+                          and dp.is_active = true
+                          and o.is_available = true
+                        """,
+                (rs, rowNum) -> new OptionUniversity(rs.getLong("university_id")),
+                optionId
+        ).stream().findFirst().orElseThrow(() -> DomainException.notFound("MENU_OPTION_NOT_FOUND", "식당 메뉴를 찾을 수 없습니다."));
+    }
+
+    private MenuOptionCompareItem menuOptionCompareItem(long optionId) {
+        return jdbcTemplate.query("""
+                        select dining_place_name,
+                               dining_place_type,
+                               option_id,
+                               category_code,
+                               category_name,
+                               option_name,
+                               calories_kcal,
+                               carb_g,
+                               protein_g,
+                               fat_g,
+                               sugar_g,
+                               sodium_mg
+                        from v_menu_option_comparison
+                        where option_id = ?
+                        """,
+                (rs, rowNum) -> new MenuOptionCompareItem(
+                        rs.getLong("option_id"),
+                        rs.getString("dining_place_name"),
+                        rs.getString("dining_place_type"),
+                        rs.getString("category_code"),
+                        rs.getString("category_name"),
+                        rs.getString("option_name"),
+                        NutrientTotals.from(rs)
+                ),
+                optionId
+        ).stream().findFirst().orElseThrow(() -> DomainException.notFound("MENU_OPTION_NOT_FOUND", "식당 메뉴를 찾을 수 없습니다."));
     }
 
     private void refreshInhaStudentMenuIfMissing(long universityId, LocalDate date, String mealTypeCode) {
@@ -305,5 +364,8 @@ public class MenuService {
     }
 
     private record UserUniversity(Long universityId) {
+    }
+
+    private record OptionUniversity(Long universityId) {
     }
 }
